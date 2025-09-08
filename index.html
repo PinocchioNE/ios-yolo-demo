@@ -1,102 +1,87 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>YOLOv8 TF.js Demo</title>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0/dist/tf.min.js"></script>
-  <style>
-    video, canvas {
-      width: 320px;
-      height: 240px;
-      border: 1px solid #333;
-      margin: 5px;
-    }
-  </style>
+<meta charset="UTF-8">
+<title>YOLOv8 TF.js Demo</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.23.0/dist/tf.min.js"></script>
+<style>
+  video, canvas { border: 1px solid black; }
+</style>
 </head>
 <body>
-  <h2>YOLOv8 TF.js Demo</h2>
-  <button id="switchBtn">切换前/后摄像头</button>
-  <div>
-    <video id="video" autoplay muted></video>
-    <canvas id="canvas"></canvas>
-  </div>
+<h2>YOLOv8 TF.js Demo</h2>
+<button id="switchBtn">切换摄像头</button>
+<br><br>
+<video id="video" autoplay playsinline></video>
+<canvas id="canvas"></canvas>
 
-  <script>
-    let video = document.getElementById('video');
-    let canvas = document.getElementById('canvas');
-    let ctx = canvas.getContext('2d');
-    let model;
-    let useFrontCamera = true;
-    let stream;
+<script>
+let model;
+let video = document.getElementById('video');
+let canvas = document.getElementById('canvas');
+let ctx = canvas.getContext('2d');
+let useFrontCamera = false; // false=后置, true=前置
+let currentStream;
 
-    async function loadModel() {
-      model = await tf.loadGraphModel('https://pinocchione.github.io/ios-yolo-demo/yolov8n_web_model/model.json');
-      console.log('Model loaded:', model);
-      startCamera();
-    }
+async function loadModel() {
+  model = await tf.loadGraphModel('https://pinocchione.github.io/ios-yolo-demo/yolov8n_web_model/model.json');
+  console.log('模型加载完成');
+}
 
-    async function startCamera() {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-      }
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: useFrontCamera ? 'user' : 'environment' }
-      });
-      video.srcObject = stream;
-      video.onloadedmetadata = () => {
-        video.play();
-        runDetection();
-      };
-    }
+async function startCamera() {
+  if (currentStream) {
+    currentStream.getTracks().forEach(track => track.stop());
+  }
+  const constraints = {
+    audio: false,
+    video: { facingMode: useFrontCamera ? 'user' : 'environment' }
+  };
+  currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+  video.srcObject = currentStream;
 
-    document.getElementById('switchBtn').addEventListener('click', () => {
-      useFrontCamera = !useFrontCamera;
-      startCamera();
-    });
+  video.onloadedmetadata = () => {
+    video.play();
+    canvas.width = 640;
+    canvas.height = 640;
+    detectFrame();
+  };
+}
 
-    async function runDetection() {
-      if (!model) return;
-      tf.engine().startScope();
+document.getElementById('switchBtn').addEventListener('click', () => {
+  useFrontCamera = !useFrontCamera;
+  startCamera();
+});
 
-      const videoTensor = tf.browser.fromPixels(video).expandDims(0).toFloat().div(255);
-      const predictions = await model.executeAsync(videoTensor);
+async function detectFrame() {
+  if (!model) return requestAnimationFrame(detectFrame);
 
-      // predictions 是对象或数组，根据模型输出调整
-      // 这里假设 predictions 是数组，取第一个 tensor
-      let boxes = [];
-      if (Array.isArray(predictions)) {
-        boxes = await predictions[0].array();
-      } else if (predictions instanceof tf.Tensor) {
-        boxes = await predictions.array();
-      } else if (typeof predictions === 'object') {
-        // TF.js graph model 输出对象时
-        const key = Object.keys(predictions)[0];
-        boxes = await predictions[key].array();
-      }
+  tf.engine().startScope();
 
-      // 清空 canvas
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  // 缩放视频到 640x640
+  let input = tf.browser.fromPixels(video)
+                .resizeBilinear([640, 640])
+                .expandDims(0)
+                .toFloat();
 
-      // 绘制预测框
-      boxes.forEach(box => {
-        // 假设 box = [x1, y1, x2, y2, score, class]
-        const [x1, y1, x2, y2, score, cls] = box;
-        if (score > 0.3) { // 阈值
-          ctx.strokeStyle = 'red';
-          ctx.lineWidth = 2;
-          ctx.strokeRect(x1 * canvas.width, y1 * canvas.height, (x2 - x1) * canvas.width, (y2 - y1) * canvas.height);
-          ctx.fillStyle = 'red';
-          ctx.fillText(`cls:${cls} ${score.toFixed(2)}`, x1 * canvas.width, y1 * canvas.height - 2);
-        }
-      });
+  // 执行推理
+  const outputs = await model.executeAsync({x: input});
 
-      console.log('Predictions:', boxes);
-      tf.engine().endScope();
-      requestAnimationFrame(runDetection);
-    }
+  // 清空画布
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    loadModel();
-  </script>
+  // 绘制视频
+  ctx.drawImage(video, 0, 0, 640, 640);
+
+  // outputs 是模型输出，可以自己解析框信息并绘制
+  // 这里简单打印一下
+  console.log(outputs);
+
+  tf.engine().endScope();
+  requestAnimationFrame(detectFrame);
+}
+
+loadModel();
+startCamera();
+</script>
 </body>
 </html>
