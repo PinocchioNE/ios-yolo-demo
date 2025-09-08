@@ -3,10 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <title>YOLOv8 TF.js Demo</title>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.23.0/dist/tf.min.js"></script>
 <style>
   video, canvas { border: 1px solid black; }
 </style>
+<!-- 用官方 jsDelivr 加载 TF.js -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.23.0/dist/tf.min.js"></script>
 </head>
 <body>
 <h2>YOLOv8 TF.js Demo</h2>
@@ -16,72 +17,72 @@
 <canvas id="canvas"></canvas>
 
 <script>
-let model;
-let video = document.getElementById('video');
-let canvas = document.getElementById('canvas');
-let ctx = canvas.getContext('2d');
-let useFrontCamera = false; // false=后置, true=前置
-let currentStream;
+window.onload = async () => {  // 等页面和 TF.js 都加载完再执行
+  let model;
+  let video = document.getElementById('video');
+  let canvas = document.getElementById('canvas');
+  let ctx = canvas.getContext('2d');
+  let useFrontCamera = false; // false=后置, true=前置
+  let currentStream;
 
-async function loadModel() {
-  model = await tf.loadGraphModel('https://pinocchione.github.io/ios-yolo-demo/yolov8n_web_model/model.json');
-  console.log('模型加载完成');
-}
-
-async function startCamera() {
-  if (currentStream) {
-    currentStream.getTracks().forEach(track => track.stop());
+  // 加载模型
+  async function loadModel() {
+    model = await tf.loadGraphModel('https://pinocchione.github.io/ios-yolo-demo/yolov8n_web_model/model.json');
+    console.log('模型加载完成');
   }
-  const constraints = {
-    audio: false,
-    video: { facingMode: useFrontCamera ? 'user' : 'environment' }
-  };
-  currentStream = await navigator.mediaDevices.getUserMedia(constraints);
-  video.srcObject = currentStream;
 
-  video.onloadedmetadata = () => {
-    video.play();
-    canvas.width = 640;
-    canvas.height = 640;
-    detectFrame();
-  };
-}
+  // 启动摄像头
+  async function startCamera() {
+    if (currentStream) {
+      currentStream.getTracks().forEach(track => track.stop());
+    }
+    const constraints = { audio: false, video: { facingMode: useFrontCamera ? 'user' : 'environment' } };
+    currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject = currentStream;
 
-document.getElementById('switchBtn').addEventListener('click', () => {
-  useFrontCamera = !useFrontCamera;
-  startCamera();
-});
+    video.onloadedmetadata = () => {
+      video.play();
+      canvas.width = 640;
+      canvas.height = 640;
+      detectFrame();
+    };
+  }
 
-async function detectFrame() {
-  if (!model) return requestAnimationFrame(detectFrame);
+  document.getElementById('switchBtn').addEventListener('click', () => {
+    useFrontCamera = !useFrontCamera;
+    startCamera();
+  });
 
-  tf.engine().startScope();
+  async function detectFrame() {
+    if (!model) return requestAnimationFrame(detectFrame);
 
-  // 缩放视频到 640x640
-  let input = tf.browser.fromPixels(video)
-                .resizeBilinear([640, 640])
-                .expandDims(0)
-                .toFloat();
+    tf.engine().startScope();
 
-  // 执行推理
-  const outputs = await model.executeAsync({x: input});
+    // 缩放视频到 640x640
+    let input = tf.browser.fromPixels(video)
+                  .resizeBilinear([640, 640])
+                  .expandDims(0)
+                  .toFloat();
 
-  // 清空画布
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // 执行推理
+    const outputs = await model.executeAsync({x: input});
 
-  // 绘制视频
-  ctx.drawImage(video, 0, 0, 640, 640);
+    // 清空画布
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // outputs 是模型输出，可以自己解析框信息并绘制
-  // 这里简单打印一下
-  console.log(outputs);
+    // 绘制视频
+    ctx.drawImage(video, 0, 0, 640, 640);
 
-  tf.engine().endScope();
-  requestAnimationFrame(detectFrame);
-}
+    // 输出结果
+    console.log(outputs);
 
-loadModel();
-startCamera();
+    tf.engine().endScope();
+    requestAnimationFrame(detectFrame);
+  }
+
+  await loadModel();   // 先确保模型加载完
+  await startCamera(); // 再启动摄像头
+};
 </script>
 </body>
 </html>
