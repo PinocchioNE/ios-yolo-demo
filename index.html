@@ -1,115 +1,105 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh">
 <head>
-  <meta charset="UTF-8">
-  <title>YOLOv8 TF.js Demo</title>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0/dist/tf.min.js"></script>
-  <style>
-    video, canvas {
-      width: 640px;
-      height: 480px;
-      border: 1px solid #333;
-      display: block;
-      margin-bottom: 10px;
-    }
-    button {
-      margin-bottom: 10px;
-    }
-  </style>
+<meta charset="UTF-8">
+<title>YOLOv8 TF.js Demo</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0/dist/tf.min.js"></script>
+<style>
+  video, canvas { border: 1px solid black; }
+  #container { display: flex; gap: 10px; }
+</style>
 </head>
 <body>
-  <h1>YOLOv8 TF.js Demo</h1>
 
+<div>
   <button id="switchBtn">切换摄像头</button>
-  <video id="video" autoplay muted playsinline></video>
-  <canvas id="canvas"></canvas>
+</div>
+<div id="container">
+  <video id="video" width="640" height="480" autoplay muted></video>
+  <canvas id="canvas2" width="640" height="480"></canvas>
+</div>
 
-  <script>
-    let video = document.getElementById('video');
-    let canvas = document.getElementById('canvas');
-    let ctx = canvas.getContext('2d');
-    let currentCamera = 'user'; // 'user' 前摄像头, 'environment' 后摄像头
-    let stream = null;
-    let model = null;
+<script>
+let model;
+let video = document.getElementById('video');
+let canvas2 = document.getElementById('canvas2');
+let ctx2 = canvas2.getContext('2d');
+let currentFacingMode = 'user'; // 前置摄像头
 
-    async function startCamera() {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-      }
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: currentCamera }
-      });
-      video.srcObject = stream;
+async function loadModel() {
+  model = await tf.loadGraphModel('https://hyuto.github.io/yolov8-tfjs/yolov8n_web_model/model.json');
+  console.log('Model loaded:', model);
+}
+
+async function startVideo() {
+  if (video.srcObject) {
+    video.srcObject.getTracks().forEach(track => track.stop());
+  }
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: currentFacingMode }
+  });
+  video.srcObject = stream;
+}
+
+document.getElementById('switchBtn').addEventListener('click', async () => {
+  currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
+  await startVideo();
+});
+
+async function runDetection() {
+  if (!model || !video.srcObject || video.readyState < 2) {
+    requestAnimationFrame(runDetection);
+    return;
+  }
+
+  const input = tf.tidy(() => tf.browser.fromPixels(video)
+      .resizeBilinear([640, 640])
+      .expandDims(0)
+      .div(255));
+
+  const output = await model.executeAsync(input);
+
+  // 打印输出确认结构
+  console.log(output);
+
+  let boxes = [];
+  // 根据输出 tensor 名称调整
+  if (output.output0) {
+    const data = await output.output0.array();
+    boxes = data[0].map(d => ({
+      x1: d[0] * canvas2.width / 640,
+      y1: d[1] * canvas2.height / 640,
+      x2: d[2] * canvas2.width / 640,
+      y2: d[3] * canvas2.height / 640,
+      score: d[4],
+      class: d[5]
+    }));
+  }
+
+  ctx2.clearRect(0, 0, canvas2.width, canvas2.height);
+
+  boxes.forEach(b => {
+    if (b.score > 0.3) {
+      ctx2.strokeStyle = 'red';
+      ctx2.lineWidth = 2;
+      ctx2.strokeRect(b.x1, b.y1, b.x2 - b.x1, b.y2 - b.y1);
+      ctx2.fillStyle = 'red';
+      ctx2.font = '16px sans-serif';
+      ctx2.fillText(`${b.class} ${b.score.toFixed(2)}`, b.x1, b.y1 - 5);
     }
+  });
 
-    document.getElementById('switchBtn').addEventListener('click', async () => {
-      currentCamera = currentCamera === 'user' ? 'environment' : 'user';
-      await startCamera();
-    });
+  tf.dispose(input);
+  requestAnimationFrame(runDetection);
+}
 
-    async function loadModel() {
-      console.log('加载模型...');
-      model = await tf.loadGraphModel('https://hyuto.github.io/yolov8-tfjs/yolov8n_web_model/model.json');
-      console.log('模型加载完成', model);
-    }
+async function init() {
+  await loadModel();
+  await startVideo();
+  runDetection();
+}
 
-    function drawPredictions(predictions) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.lineWidth = 2;
-      ctx.font = '16px Arial';
-      ctx.strokeStyle = 'red';
-      ctx.fillStyle = 'red';
-
-      predictions.forEach(p => {
-        const [x, y, w, h] = p.bbox;
-        ctx.strokeRect(x, y, w, h);
-        ctx.fillText(`${p.class} ${p.score.toFixed(2)}`, x, y > 10 ? y - 5 : y + 15);
-      });
-    }
-
-    async function runDetection() {
-      if (!model) return;
-
-      const inputTensor = tf.browser.fromPixels(video)
-        .resizeBilinear([640, 640])
-        .div(255)
-        .expandDims(0);
-
-      try {
-        const output = await model.executeAsync(inputTensor);
-        const data = output.arraySync()[0]; // shape: [N,6]
-
-        const predictions = [];
-        for (let i = 0; i < data.length; i++) {
-          const [x, y, w, h, score, classId] = data[i];
-          if (score > 0.3) {
-            predictions.push({
-              bbox: [x * video.videoWidth, y * video.videoHeight, w * video.videoWidth, h * video.videoHeight],
-              score: score,
-              class: classId.toString()
-            });
-          }
-        }
-
-        drawPredictions(predictions);
-      } catch (err) {
-        console.error('模型预测失败:', err);
-      } finally {
-        inputTensor.dispose();
-        if (Array.isArray(output)) output.forEach(t => t.dispose());
-        else output.dispose();
-      }
-
-      requestAnimationFrame(runDetection);
-    }
-
-    async function init() {
-      await startCamera();
-      await loadModel();
-      runDetection();
-    }
-
-    init();
-  </script>
+init();
+</script>
 </body>
 </html>
