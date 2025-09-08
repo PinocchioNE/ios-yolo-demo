@@ -2,14 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>YOLOv8 TF.js Demo</title>
+<title>YOLOv8 TF.js Demo with Boxes</title>
 <style>
   video, canvas { border: 1px solid black; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
 </head>
 <body>
-<h2>YOLOv8 TF.js Demo</h2>
+<h2>YOLOv8 TF.js Demo with Boxes</h2>
 <button id="switchBtn">切换摄像头</button>
 <br><br>
 <video id="video" autoplay playsinline></video>
@@ -18,26 +18,22 @@
 <script>
 window.onload = async () => {
   let model;
-  let video = document.getElementById('video');
-  let canvas = document.getElementById('canvas');
-  let ctx = canvas.getContext('2d');
-  let useFrontCamera = false; 
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  let useFrontCamera = false;
   let currentStream;
 
-  // 类别名，可根据模型自己改
-  const classNames = ["person","bicycle","car","motorbike","aeroplane","bus","train","truck","boat","traffic light"];
-
-  // 加载模型
+  // ------------------- 加载模型 -------------------
   async function loadModel() {
     model = await tf.loadGraphModel('https://pinocchione.github.io/ios-yolo-demo/yolov8n_web_model/model.json');
     console.log('模型加载完成');
   }
 
-  // 启动摄像头
+  // ------------------- 启动摄像头 -------------------
   async function startCamera() {
-    if (currentStream) {
-      currentStream.getTracks().forEach(track => track.stop());
-    }
+    if (currentStream) currentStream.getTracks().forEach(track => track.stop());
+
     const constraints = { audio: false, video: { facingMode: useFrontCamera ? 'user' : 'environment' } };
     currentStream = await navigator.mediaDevices.getUserMedia(constraints);
     video.srcObject = currentStream;
@@ -55,45 +51,108 @@ window.onload = async () => {
     startCamera();
   });
 
-  async function detectFrame() {
-    if (!model) return requestAnimationFrame(detectFrame);
+  // ------------------- NMS 简化版 -------------------
+  function nonMaxSuppression(boxes, scores, iouThreshold = 0.5, scoreThreshold = 0.3) {
+    const picked = [];
+    const indexes = scores
+      .map((s, i) => [s, i])
+      .filter(([s, i]) => s > scoreThreshold)
+      .sort((a,b) => b[0] - a[0])
+      .map(x => x[1]);
 
-    tf.engine().startScope();
+    while (indexes.length > 0) {
+      const i = indexes.shift();
+      picked.push(i);
+      const rest = [];
+      for (let j of indexes) {
+        const [x1, y1, x2, y2] = boxes[i];
+        const [xx1, yy1, xx2, yy2] = boxes[j];
+        const xi1 = Math.max(x1, xx1);
+        const yi1 = Math.max(y1, yy1);
+        const xi2 = Math.min(x2, xx2);
+        const yi2 = Math.min(y2, yy2);
+        const w = Math.max(0, xi2 - xi1);
+        const h = Math.max(0, yi2 - yi1);
+        const inter = w*h;
+        const area1 = (x2-x1)*(y2-y1);
+        const area2 = (xx2-xx1)*(yy2-yy1);
+        const iou = inter / (area1 + area2 - inter);
+        if (iou < iouThreshold) rest.push(j);
+      }
+      indexes.splice(0, indexes.length, ...rest);
+    }
+    return picked;
+  }
 
-    // 视频 -> tensor
-    let input = tf.browser.fromPixels(video)
-                  .resizeBilinear([640, 640])
-                  .expandDims(0)
-                  .toFloat();
+  // ------------------- 框解码 -------------------
+  function processOutputs(output) {
+    // output shape: [1, 84, 8400]
+    const data = output.dataSync();
+    const boxes = [];
+    const scores = [];
+    const classIds = [];
+    const numClasses = 80;
+    const numBoxes = 8400;
 
-    // 推理
-    const outputs = await model.executeAsync({x: input});
-    const data = outputs.arraySync(); // [N,6]: x1,y1,x2,y2,score,class
+    for (let i = 0; i < numBoxes; i++) {
+      const offset = i * (numClasses + 5);
+      const x = data[offset];
+      const y = data[offset+1];
+      const w = data[offset+2];
+      const h = data[offset+3];
+      const objConf = data[offset+4];
 
-    // 清空画布
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(video, 0, 0, 640, 640);
+      let maxClass = 0;
+      let maxScore = 0;
+      for (let c=0; c<numClasses; c++) {
+        const clsScore = data[offset+5+c];
+        if (clsScore > maxScore) {
+          maxScore = clsScore;
+          maxClass = c;
+        }
+      }
+      const score = objConf * maxScore;
+      if (score > 0.3) {  // 阈值
+        const x1 = (x - w/2) * 640;
+        const y1 = (y - h/2) * 640;
+        const x2 = (x + w/2) * 640;
+        const y2 = (y + h/2) * 640;
+        boxes.push([x1,y1,x2,y2]);
+        scores.push(score);
+        classIds.push(maxClass);
+      }
+    }
 
-    // 绘制检测框
-    for (let i=0; i<data.length; i++) {
-      let [x1, y1, x2, y2, score, cls] = data[i];
-      if (score < 0.3) continue; // 置信度阈值
+    const picked = nonMaxSuppression(boxes, scores, 0.5, 0.3);
+    const finalBoxes = picked.map(i => ({box: boxes[i], score: scores[i], classId: classIds[i]}));
+    return finalBoxes;
+  }
 
-      // 坐标转换为像素
-      x1 *= canvas.width; x2 *= canvas.width;
-      y1 *= canvas.height; y2 *= canvas.height;
-
-      // 框
+  // ------------------- 绘制 -------------------
+  function drawBoxes(boxes) {
+    for (let item of boxes) {
+      const [x1,y1,x2,y2] = item.box;
       ctx.strokeStyle = 'red';
       ctx.lineWidth = 2;
-      ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-
-      // 标签
+      ctx.strokeRect(x1, y1, x2-x1, y2-y1);
       ctx.fillStyle = 'red';
-      ctx.font = '18px Arial';
-      const label = `${classNames[cls] || cls} ${(score*100).toFixed(1)}%`;
-      ctx.fillText(label, x1, y1>20?y1-5:y1+20);
+      ctx.font = '16px Arial';
+      ctx.fillText(item.classId + ':' + item.score.toFixed(2), x1, y1>10?y1-5:10);
     }
+  }
+
+  // ------------------- 检测循环 -------------------
+  async function detectFrame() {
+    if (!model) return requestAnimationFrame(detectFrame);
+    tf.engine().startScope();
+
+    let input = tf.browser.fromPixels(video).resizeBilinear([640,640]).expandDims(0).toFloat();
+    const output = await model.executeAsync({x: input});
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.drawImage(video,0,0,640,640);
+
+    const boxes = processOutputs(output);
+    drawBoxes(boxes);
 
     tf.engine().endScope();
     requestAnimationFrame(detectFrame);
