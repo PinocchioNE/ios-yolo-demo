@@ -438,7 +438,7 @@
                 const processingTime = performance.now() - startTime;
                 updatePerformanceMetrics(processingTime, detections.length);
 
-                // 立即清理内存
+                // 立即清理内存 - 每帧都清理
                 inputTensor.dispose();
                 if (Array.isArray(predictions)) {
                     predictions.forEach(tensor => tensor.dispose());
@@ -446,9 +446,19 @@
                     predictions.dispose();
                 }
 
-                // 定期强制垃圾回收
-                if (frameCount % 30 === 0) {
+                // 更频繁的垃圾回收 - 每10帧一次
+                if (frameCount % 10 === 0) {
                     await tf.nextFrame();
+                    // 手机上强制垃圾回收
+                    if (window.gc) {
+                        window.gc();
+                    }
+                }
+
+                // 每50帧深度清理一次
+                if (frameCount % 50 === 0) {
+                    tf.engine().startScope();
+                    tf.engine().endScope();
                 }
 
             } catch (error) {
@@ -482,9 +492,15 @@
 
             // 转换为tensor
             const imageData = tempCtx.getImageData(0, 0, 640, 640);
-            return tf.browser.fromPixels(imageData)
+            const tensor = tf.browser.fromPixels(imageData)
                 .expandDims(0)
                 .div(255.0);
+            
+            // 清理临时canvas
+            tempCanvas.width = 0;
+            tempCanvas.height = 0;
+            
+            return tensor;
         }
 
         // 修复后的后处理函数
@@ -713,12 +729,19 @@
                 document.getElementById('memoryInfo').textContent = `内存使用: ${memoryMB}MB`;
                 document.getElementById('tensorInfo').textContent = `张量数量: ${memInfo.numTensors}`;
 
-                // 内存使用过高时自动清理
-                if (memInfo.numBytes > 500 * 1024 * 1024) { // 500MB
+                // 手机上更严格的内存限制 - 降低到200MB
+                if (memInfo.numBytes > 200 * 1024 * 1024) { // 200MB
                     console.warn('内存使用过高，自动清理');
                     clearMemory();
                 }
-            }, 2000);
+                
+                // 张量数量过多时也清理
+                if (memInfo.numTensors > 50) {
+                    console.warn('张量数量过多，自动清理');
+                    tf.engine().startScope();
+                    tf.engine().endScope();
+                }
+            }, 1000); // 改为每秒检查一次
         }
 
         function cleanup() {
