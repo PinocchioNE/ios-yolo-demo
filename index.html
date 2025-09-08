@@ -2,10 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>YOLO Demo</title>
-  <!-- TensorFlow.js -->
+  <title>YOLOv8 TF.js Demo</title>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0/dist/tf.min.js"></script>
-  <!-- 额外可选：用于模型可视化或处理 -->
   <style>
     video, canvas {
       width: 640px;
@@ -15,7 +13,7 @@
   </style>
 </head>
 <body>
-  <h1>YOLO Demo</h1>
+  <h1>YOLOv8 TF.js Demo</h1>
   <video id="video" autoplay muted></video>
   <canvas id="canvas"></canvas>
 
@@ -23,9 +21,9 @@
     async function initCamera() {
       const video = document.getElementById('video');
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
         video.srcObject = stream;
-        return new Promise((resolve) => {
+        return new Promise(resolve => {
           video.onloadedmetadata = () => {
             video.play();
             resolve(video);
@@ -37,7 +35,6 @@
     }
 
     async function loadModel() {
-      // 使用官方 CDN YOLOv8n TF.js 模型
       const modelUrl = 'https://hyuto.github.io/yolov8-tfjs/yolov8n_web_model/model.json';
       const model = await tf.loadGraphModel(modelUrl);
       console.log('Model loaded:', model);
@@ -52,13 +49,13 @@
 
       ctx.strokeStyle = 'red';
       ctx.lineWidth = 2;
-      ctx.font = '18px Arial';
+      ctx.font = '16px Arial';
       ctx.fillStyle = 'red';
 
       predictions.forEach(pred => {
-        const [x, y, w, h] = pred.bbox; // 假设 pred.bbox = [x, y, width, height]
+        const [x, y, w, h] = pred.bbox;
         ctx.strokeRect(x, y, w, h);
-        ctx.fillText(pred.class + ' ' + (pred.score*100).toFixed(1) + '%', x, y > 10 ? y-5 : 10);
+        ctx.fillText(`${pred.class} ${(pred.score*100).toFixed(1)}%`, x, y > 10 ? y-5 : 10);
       });
     }
 
@@ -67,17 +64,40 @@
       const canvas = document.getElementById('canvas');
       const model = await loadModel();
 
-      // 简单循环示例：实际检测需要对每帧进行预处理
-      setInterval(async () => {
-        // TODO: 替换成你的 YOLO 推理逻辑
-        // 这里演示随机框
-        const predictions = [{
-          bbox: [50, 50, 200, 150],
-          class: 'demo',
-          score: 0.85
-        }];
+      async function detectFrame() {
+        tf.engine().startScope();
+
+        // 把 video 转成 Tensor
+        const imgTensor = tf.browser.fromPixels(video).expandDims(0).toFloat().div(255.0);
+
+        // 调用模型
+        const outputs = await model.executeAsync(imgTensor);
+
+        // YOLOv8 TF.js 输出解析，可能包含 boxes, scores, classes
+        // 假设 outputs[0]=boxes, outputs[1]=scores, outputs[2]=classIds
+        const boxes = outputs[0].arraySync()[0];      // [N,4] -> [x1,y1,x2,y2]
+        const scores = outputs[1].arraySync()[0];     // [N]
+        const classes = outputs[2].arraySync()[0];    // [N]
+
+        const predictions = [];
+        for(let i=0; i<scores.length; i++){
+          if(scores[i] > 0.3){ // 阈值，可调
+            const [x1,y1,x2,y2] = boxes[i];
+            predictions.push({
+              bbox: [x1, y1, x2-x1, y2-y1],
+              class: classes[i].toString(),
+              score: scores[i]
+            });
+          }
+        }
+
         drawPredictions(predictions, canvas, video);
-      }, 1000); // 每秒更新一次
+
+        tf.engine().endScope();
+        requestAnimationFrame(detectFrame);
+      }
+
+      detectFrame();
     }
 
     window.onload = runDemo;
