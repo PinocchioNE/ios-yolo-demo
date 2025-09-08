@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YOLOv8 TensorFlow.js 目标检测</title>
+    <title>YOLOv8 目标检测</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
     <style>
         body {
@@ -180,12 +180,12 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>YOLOv8 TensorFlow.js 实时目标检测</h1>
+            <h1>YOLOv8 目标检测</h1>
             <div class="model-info">
                 xth_yolo_use_based_cellPhone
             </div>
             <div class="memory-info">
-                <span id="memoryInfo">内存使用: 0MB</span> | 
+                <span id="memoryInfo">内存使用: 0MB</span> |
                 <span id="tensorInfo">张量数量: 0</span>
             </div>
             <div id="status" class="status loading">正在初始化...</div>
@@ -246,7 +246,7 @@
         let detectionInterval = null;
         let memoryCheckInterval = null;
         let frameSkipCount = 0;
-        const FRAME_SKIP = 3; // 每3帧处理一次，降低处理频率
+        const FRAME_SKIP = 1; // 改为每帧都处理，不跳帧
 
         // COCO数据集的80个类别名称
         const classNames = [
@@ -305,7 +305,7 @@
                         const aspectRatio = video.videoWidth / video.videoHeight;
                         const maxWidth = 640;
                         const maxHeight = 480;
-                        
+
                         if (aspectRatio > maxWidth / maxHeight) {
                             canvas.width = maxWidth;
                             canvas.height = maxWidth / aspectRatio;
@@ -313,11 +313,11 @@
                             canvas.height = maxHeight;
                             canvas.width = maxHeight * aspectRatio;
                         }
-                        
+
                         // 更新摄像头类型显示
-                        document.getElementById('cameraType').textContent = 
+                        document.getElementById('cameraType').textContent =
                             facingMode === 'user' ? '前置' : '后置';
-                        
+
                         document.getElementById('switchCameraBtn').disabled = false;
                         resolve();
                     };
@@ -369,14 +369,14 @@
             document.getElementById('stopBtn').addEventListener('click', stopDetection);
             document.getElementById('switchCameraBtn').addEventListener('click', switchCamera);
             document.getElementById('clearMemoryBtn').addEventListener('click', clearMemory);
-            
+
             // 页面隐藏时停止检测
             document.addEventListener('visibilitychange', () => {
                 if (document.hidden && isDetecting) {
                     stopDetection();
                 }
             });
-            
+
             // 页面卸载时清理资源
             window.addEventListener('beforeunload', cleanup);
         }
@@ -400,7 +400,7 @@
             document.getElementById('startBtn').disabled = false;
             document.getElementById('stopBtn').disabled = true;
             updateStatus('检测已停止', 'ready');
-            
+
             // 清理检测间隔
             if (detectionInterval) {
                 clearTimeout(detectionInterval);
@@ -412,10 +412,10 @@
             if (!isDetecting) return;
 
             try {
-                // 跳帧处理，降低处理频率
+                // 不跳帧，每帧都处理
                 frameSkipCount++;
                 if (frameSkipCount < FRAME_SKIP) {
-                    detectionInterval = setTimeout(detectLoop, 33); // ~30fps
+                    detectionInterval = setTimeout(detectLoop, 16); // ~60fps显示频率
                     return;
                 }
                 frameSkipCount = 0;
@@ -453,15 +453,14 @@
 
             } catch (error) {
                 console.error('检测过程出错:', error);
-                // 错误恢复：停止检测并清理内存
                 stopDetection();
                 clearMemory();
                 updateStatus('检测出错，已自动停止: ' + error.message, 'error');
             }
 
-            // 使用setTimeout而不是requestAnimationFrame，更好控制频率
+            // 提高处理频率
             if (isDetecting) {
-                detectionInterval = setTimeout(detectLoop, 100); // 10fps，降低处理频率
+                detectionInterval = setTimeout(detectLoop, 33); // 30fps处理频率
             }
         }
 
@@ -493,13 +492,13 @@
             const output = Array.isArray(predictions) ? predictions[0] : predictions;
             const outputData = await output.data();
             const outputShape = output.shape;
-            
+
             const detections = [];
-            
+
             // YOLOv8输出格式通常是 [1, 84, 8400] 或类似格式
             if (outputShape.length === 3) {
                 const [batchSize, numClasses, numBoxes] = outputShape;
-                
+
                 // 转置数据：从 [1, 84, 8400] 到 [8400, 84]
                 for (let i = 0; i < numBoxes; i++) {
                     // 提取坐标 (cx, cy, w, h)
@@ -507,11 +506,11 @@
                     const cy = outputData[numBoxes + i];
                     const w = outputData[2 * numBoxes + i];
                     const h = outputData[3 * numBoxes + i];
-                    
+
                     // 找到最大类别概率
                     let maxClassScore = 0;
                     let classId = 0;
-                    
+
                     for (let j = 4; j < numClasses; j++) {
                         const classScore = outputData[j * numBoxes + i];
                         if (classScore > maxClassScore) {
@@ -519,7 +518,7 @@
                             classId = j - 4;
                         }
                     }
-                    
+
                     // 提高置信度阈值，减少误检
                     if (maxClassScore > 0.7) {
                         detections.push({
@@ -536,17 +535,17 @@
             } else {
                 // 备用处理方式
                 const numDetections = Math.min(8400, Math.floor(outputData.length / 85));
-                
+
                 for (let i = 0; i < numDetections; i++) {
                     const offset = i * 85;
                     const cx = outputData[offset];
                     const cy = outputData[offset + 1];
                     const w = outputData[offset + 2];
                     const h = outputData[offset + 3];
-                    
+
                     let maxClassScore = 0;
                     let classId = 0;
-                    
+
                     for (let j = 0; j < 80; j++) {
                         const classScore = outputData[offset + 4 + j];
                         if (classScore > maxClassScore) {
@@ -554,7 +553,7 @@
                             classId = j;
                         }
                     }
-                    
+
                     if (maxClassScore > 0.7) {
                         detections.push({
                             x: (cx - w / 2) / 640,
@@ -568,50 +567,50 @@
                     }
                 }
             }
-            
+
             // 非极大值抑制 (NMS)
             return applyNMS(detections, 0.4);
         }
-        
+
         // 非极大值抑制函数
         function applyNMS(detections, iouThreshold) {
             detections.sort((a, b) => b.confidence - a.confidence);
-            
+
             const keep = [];
             const suppressed = new Set();
-            
+
             for (let i = 0; i < detections.length; i++) {
                 if (suppressed.has(i)) continue;
-                
+
                 keep.push(detections[i]);
-                
+
                 for (let j = i + 1; j < detections.length; j++) {
                     if (suppressed.has(j)) continue;
-                    
+
                     const iou = calculateIoU(detections[i], detections[j]);
                     if (iou > iouThreshold) {
                         suppressed.add(j);
                     }
                 }
             }
-            
+
             return keep.slice(0, 20); // 限制最大检测数量
         }
-        
+
         // 计算IoU
         function calculateIoU(box1, box2) {
             const x1 = Math.max(box1.x, box2.x);
             const y1 = Math.max(box1.y, box2.y);
             const x2 = Math.min(box1.x + box1.width, box2.x + box2.width);
             const y2 = Math.min(box1.y + box1.height, box2.y + box2.height);
-            
+
             if (x2 <= x1 || y2 <= y1) return 0;
-            
+
             const intersection = (x2 - x1) * (y2 - y1);
             const area1 = box1.width * box1.height;
             const area2 = box2.width * box2.height;
             const union = area1 + area2 - intersection;
-            
+
             return intersection / union;
         }
 
@@ -693,12 +692,12 @@
                 if (window.gc) {
                     window.gc();
                 }
-                
+
                 // TensorFlow.js 内存清理
                 tf.disposeVariables();
                 tf.engine().startScope();
                 tf.engine().endScope();
-                
+
                 console.log('内存清理完成');
                 updateStatus('内存清理完成', 'ready');
             } catch (error) {
@@ -710,10 +709,10 @@
             memoryCheckInterval = setInterval(() => {
                 const memInfo = tf.memory();
                 const memoryMB = (memInfo.numBytes / 1024 / 1024).toFixed(1);
-                
+
                 document.getElementById('memoryInfo').textContent = `内存使用: ${memoryMB}MB`;
                 document.getElementById('tensorInfo').textContent = `张量数量: ${memInfo.numTensors}`;
-                
+
                 // 内存使用过高时自动清理
                 if (memInfo.numBytes > 500 * 1024 * 1024) { // 500MB
                     console.warn('内存使用过高，自动清理');
@@ -724,15 +723,15 @@
 
         function cleanup() {
             stopDetection();
-            
+
             if (currentStream) {
                 currentStream.getTracks().forEach(track => track.stop());
             }
-            
+
             if (memoryCheckInterval) {
                 clearInterval(memoryCheckInterval);
             }
-            
+
             clearMemory();
         }
 
