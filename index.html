@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YOLOv8 TensorFlow.js 目标检测 - 修复版</title>
+    <title>YOLOv8 TensorFlow.js 目标检测</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
     <style>
         body {
@@ -160,26 +160,20 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>YOLOv8 TensorFlow.js 实时目标检测 - 修复版</h1>
+            <h1>YOLOv8 TensorFlow.js 实时目标检测</h1>
             <div id="status" class="status loading">正在初始化...</div>
         </div>
 
         <div class="controls-panel">
             <div class="control-group">
                 <label>置信度阈值:</label>
-                <input type="range" id="confidenceSlider" min="0.1" max="0.9" step="0.05" value="0.25">
-                <span id="confidenceValue">0.25</span>
+                <input type="range" id="confidenceSlider" min="0.1" max="0.9" step="0.05" value="0.5">
+                <span id="confidenceValue">0.5</span>
             </div>
             <div class="control-group">
                 <label>NMS阈值:</label>
                 <input type="range" id="nmsSlider" min="0.1" max="0.9" step="0.05" value="0.4">
                 <span id="nmsValue">0.4</span>
-            </div>
-            <div class="control-group">
-                <label>显示检测框:</label>
-                <input type="checkbox" id="showBoxes" checked>
-                <label>显示标签:</label>
-                <input type="checkbox" id="showLabels" checked>
             </div>
         </div>
 
@@ -187,7 +181,6 @@
             <button id="startBtn" class="btn-primary">开始检测</button>
             <button id="stopBtn" class="btn-secondary" disabled>停止检测</button>
             <button id="switchCameraBtn" class="btn-secondary">切换摄像头</button>
-            <button id="debugBtn" class="btn-secondary">调试模式</button>
         </div>
 
         <div class="video-container">
@@ -238,17 +231,16 @@
                 this.currentCameraIndex = 0;
                 this.cameras = [];
                 this.animationId = null;
-                this.debugMode = false;
-                
+
                 // 性能监控
                 this.fps = 0;
                 this.frameCount = 0;
                 this.lastTime = performance.now();
-                
+
                 // 检测参数
-                this.confidenceThreshold = 0.25;
+                this.confidenceThreshold = 0.5;
                 this.nmsThreshold = 0.4;
-                
+
                 // COCO类别名称
                 this.classNames = [
                     'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat',
@@ -262,7 +254,7 @@
                     'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink',
                     'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush'
                 ];
-                
+
                 this.init();
             }
 
@@ -281,9 +273,10 @@
 
             async setupCamera() {
                 try {
+                    // 获取所有摄像头设备
                     const devices = await navigator.mediaDevices.enumerateDevices();
                     this.cameras = devices.filter(device => device.kind === 'videoinput');
-                    
+
                     if (this.cameras.length === 0) {
                         throw new Error('未找到摄像头设备');
                     }
@@ -296,6 +289,7 @@
 
             async switchCamera(index) {
                 try {
+                    // 停止当前流
                     if (this.currentStream) {
                         this.currentStream.getTracks().forEach(track => track.stop());
                     }
@@ -312,9 +306,10 @@
 
                     this.currentStream = await navigator.mediaDevices.getUserMedia(constraints);
                     this.video.srcObject = this.currentStream;
-                    
+
                     return new Promise((resolve) => {
                         this.video.onloadedmetadata = () => {
+                            // 设置canvas尺寸
                             this.canvas.width = 640;
                             this.canvas.height = 640;
                             resolve();
@@ -329,10 +324,18 @@
                 try {
                     this.updateStatus('正在加载YOLO模型...', 'loading');
                     document.getElementById('modelStatus').textContent = '加载中...';
-                    
-                    // 使用模拟模型进行测试
-                    await this.createMockModel();
-                    
+
+                    // 替换为你的模型URL
+                    const modelUrl = 'https://pinocchione.github.io/ios-yolo-demo/yolov8n_web_model/model.json';
+
+                    this.model = await tf.loadLayersModel(modelUrl);
+
+                    // 预热模型
+                    const dummyInput = tf.zeros([1, 640, 640, 3]);
+                    const warmupResult = this.model.predict(dummyInput);
+                    warmupResult.dispose();
+                    dummyInput.dispose();
+
                     document.getElementById('modelStatus').textContent = '已加载';
                     console.log('模型加载成功');
                 } catch (error) {
@@ -341,52 +344,26 @@
                 }
             }
 
-            async createMockModel() {
-                // 创建模拟模型用于测试绘制功能
-                this.model = {
-                    predict: (input) => {
-                        // 模拟检测结果
-                        const mockDetections = [
-                            {
-                                x: 0.3, y: 0.2, width: 0.4, height: 0.3,
-                                confidence: 0.761, classId: 66, className: 'keyboard'
-                            },
-                            {
-                                x: 0.1, y: 0.1, width: 0.8, height: 0.6,
-                                confidence: 0.744, classId: 62, className: 'tv'
-                            },
-                            {
-                                x: 0.7, y: 0.8, width: 0.1, height: 0.1,
-                                confidence: 0.287, classId: 64, className: 'mouse'
-                            }
-                        ];
-                        
-                        return Promise.resolve(mockDetections);
-                    }
-                };
-            }
-
             setupEventListeners() {
+                // 开始/停止按钮
                 document.getElementById('startBtn').addEventListener('click', () => this.startDetection());
                 document.getElementById('stopBtn').addEventListener('click', () => this.stopDetection());
-                document.getElementById('debugBtn').addEventListener('click', () => {
-                    this.debugMode = !this.debugMode;
-                    console.log('调试模式:', this.debugMode ? '开启' : '关闭');
-                });
-                
+
+                // 切换摄像头
                 document.getElementById('switchCameraBtn').addEventListener('click', () => {
                     this.currentCameraIndex = (this.currentCameraIndex + 1) % this.cameras.length;
                     this.switchCamera(this.currentCameraIndex);
                 });
-                
+
+                // 参数控制
                 const confidenceSlider = document.getElementById('confidenceSlider');
                 const nmsSlider = document.getElementById('nmsSlider');
-                
+
                 confidenceSlider.addEventListener('input', (e) => {
                     this.confidenceThreshold = parseFloat(e.target.value);
                     document.getElementById('confidenceValue').textContent = e.target.value;
                 });
-                
+
                 nmsSlider.addEventListener('input', (e) => {
                     this.nmsThreshold = parseFloat(e.target.value);
                     document.getElementById('nmsValue').textContent = e.target.value;
@@ -398,12 +375,12 @@
                     alert('模型未加载完成');
                     return;
                 }
-                
+
                 this.isDetecting = true;
                 document.getElementById('startBtn').disabled = true;
                 document.getElementById('stopBtn').disabled = false;
                 this.updateStatus('检测中...', 'ready');
-                
+
                 this.detectLoop();
             }
 
@@ -412,7 +389,7 @@
                 document.getElementById('startBtn').disabled = false;
                 document.getElementById('stopBtn').disabled = true;
                 this.updateStatus('检测已停止', 'ready');
-                
+
                 if (this.animationId) {
                     cancelAnimationFrame(this.animationId);
                     this.animationId = null;
@@ -421,116 +398,185 @@
 
             async detectLoop() {
                 if (!this.isDetecting) return;
-                
+
                 try {
                     const startTime = performance.now();
-                    
-                    // 获取检测结果（使用模拟数据）
-                    const detections = await this.model.predict(null);
-                    
-                    // 过滤低置信度检测
-                    const filteredDetections = detections.filter(det => 
-                        det.confidence > this.confidenceThreshold
-                    );
-                    
+
+                    // 预处理图像
+                    const inputTensor = this.preprocessImage();
+
+                    // 模型推理
+                    const predictions = this.model.predict(inputTensor);
+
+                    // 后处理
+                    const detections = await this.postprocess(predictions);
+
                     // 绘制结果
-                    this.drawDetections(filteredDetections);
-                    
-                    // 更新检测详情
-                    this.updateDetectionDetails(filteredDetections);
-                    
+                    this.drawDetections(detections);
+
                     // 更新性能指标
                     const processingTime = performance.now() - startTime;
-                    this.updatePerformanceMetrics(processingTime, filteredDetections.length);
-                    
-                    if (this.debugMode) {
-                        console.log('检测结果:', filteredDetections);
+                    this.updatePerformanceMetrics(processingTime, detections.length);
+
+                    // 清理内存
+                    inputTensor.dispose();
+                    if (Array.isArray(predictions)) {
+                        predictions.forEach(tensor => tensor.dispose());
+                    } else {
+                        predictions.dispose();
                     }
-                    
+
                 } catch (error) {
                     console.error('检测过程出错:', error);
                     this.updateStatus('检测出错: ' + error.message, 'error');
                 }
-                
+
+                // 继续下一帧
                 this.animationId = requestAnimationFrame(() => this.detectLoop());
+            }
+
+            preprocessImage() {
+                // 创建临时canvas进行图像预处理
+                const tempCanvas = document.createElement('canvas');
+                const tempCtx = tempCanvas.getContext('2d');
+                tempCanvas.width = 640;
+                tempCanvas.height = 640;
+
+                // 计算居中裁剪参数
+                const videoWidth = this.video.videoWidth;
+                const videoHeight = this.video.videoHeight;
+                const aspectRatio = videoWidth / videoHeight;
+
+                let sourceX = 0, sourceY = 0, sourceWidth = videoWidth, sourceHeight = videoHeight;
+
+                if (aspectRatio > 1) {
+                    // 视频更宽，裁剪左右
+                    sourceWidth = videoHeight;
+                    sourceX = (videoWidth - sourceWidth) / 2;
+                } else {
+                    // 视频更高，裁剪上下
+                    sourceHeight = videoWidth;
+                    sourceY = (videoHeight - sourceHeight) / 2;
+                }
+
+                // 绘制裁剪后的图像
+                tempCtx.drawImage(
+                    this.video,
+                    sourceX, sourceY, sourceWidth, sourceHeight,
+                    0, 0, 640, 640
+                );
+
+                // 转换为tensor
+                const imageData = tempCtx.getImageData(0, 0, 640, 640);
+                const tensor = tf.browser.fromPixels(imageData)
+                    .expandDims(0)
+                    .div(255.0);
+
+                return tensor;
+            }
+
+            async postprocess(predictions) {
+                // 获取预测结果
+                const output = Array.isArray(predictions) ? predictions[0] : predictions;
+                const outputData = await output.data();
+
+                const detections = [];
+                const numDetections = outputData.length / 85; // 假设输出格式为 [x, y, w, h, conf, ...classes]
+
+                for (let i = 0; i < numDetections; i++) {
+                    const offset = i * 85;
+                    const confidence = outputData[offset + 4];
+
+                    if (confidence > this.confidenceThreshold) {
+                        // 找到最高置信度的类别
+                        let maxClassScore = 0;
+                        let classId = 0;
+
+                        for (let j = 0; j < 80; j++) {
+                            const classScore = outputData[offset + 5 + j];
+                            if (classScore > maxClassScore) {
+                                maxClassScore = classScore;
+                                classId = j;
+                            }
+                        }
+
+                        const finalScore = confidence * maxClassScore;
+
+                        if (finalScore > this.confidenceThreshold) {
+                            const x = outputData[offset];
+                            const y = outputData[offset + 1];
+                            const w = outputData[offset + 2];
+                            const h = outputData[offset + 3];
+
+                            detections.push({
+                                x: x - w / 2,
+                                y: y - h / 2,
+                                width: w,
+                                height: h,
+                                confidence: finalScore,
+                                classId: classId,
+                                className: this.classNames[classId] || `class_${classId}`
+                            });
+                        }
+                    }
+                }
+
+                // 应用NMS
+                return this.applyNMS(detections);
+            }
+
+            applyNMS(detections) {
+                // 按置信度排序
+                detections.sort((a, b) => b.confidence - a.confidence);
+
+                const keep = [];
+                const suppressed = new Set();
+
+                for (let i = 0; i < detections.length; i++) {
+                    if (suppressed.has(i)) continue;
+
+                    keep.push(detections[i]);
+
+                    for (let j = i + 1; j < detections.length; j++) {
+                        if (suppressed.has(j)) continue;
+
+                        const iou = this.calculateIoU(detections[i], detections[j]);
+                        if (iou > this.nmsThreshold && detections[i].classId === detections[j].classId) {
+                            suppressed.add(j);
+                        }
+                    }
+                }
+
+                return keep;
+            }
+
+            calculateIoU(box1, box2) {
+                const x1 = Math.max(box1.x, box2.x);
+                const y1 = Math.max(box1.y, box2.y);
+                const x2 = Math.min(box1.x + box1.width, box2.x + box2.width);
+                const y2 = Math.min(box1.y + box1.height, box2.y + box2.height);
+
+                if (x2 <= x1 || y2 <= y1) return 0;
+
+                const intersection = (x2 - x1) * (y2 - y1);
+                const area1 = box1.width * box1.height;
+                const area2 = box2.width * box2.height;
+                const union = area1 + area2 - intersection;
+
+                return intersection / union;
             }
 
             drawDetections(detections) {
                 // 清空canvas
                 this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-                
-                // 先绘制视频帧
-                this.drawVideoFrame();
-                
-                // 再绘制检测框
-                const showBoxes = document.getElementById('showBoxes').checked;
-                const showLabels = document.getElementById('showLabels').checked;
-                
-                if (!showBoxes && !showLabels) return;
-                
-                detections.forEach((detection, index) => {
-                    // 转换坐标到canvas尺寸
-                    const x = detection.x * this.canvas.width;
-                    const y = detection.y * this.canvas.height;
-                    const width = detection.width * this.canvas.width;
-                    const height = detection.height * this.canvas.height;
-                    
-                    // 确保坐标在canvas范围内
-                    const clampedX = Math.max(0, Math.min(x, this.canvas.width - width));
-                    const clampedY = Math.max(0, Math.min(y, this.canvas.height - height));
-                    const clampedWidth = Math.max(1, Math.min(width, this.canvas.width - clampedX));
-                    const clampedHeight = Math.max(1, Math.min(height, this.canvas.height - clampedY));
-                    
-                    // 设置颜色
-                    const colors = ['#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF', '#FFA500'];
-                    const color = colors[detection.classId % colors.length];
-                    
-                    if (showBoxes) {
-                        // 绘制检测框
-                        this.ctx.strokeStyle = color;
-                        this.ctx.lineWidth = 4;
-                        this.ctx.strokeRect(clampedX, clampedY, clampedWidth, clampedHeight);
-                        
-                        // 绘制半透明填充
-                        this.ctx.fillStyle = color + '20';
-                        this.ctx.fillRect(clampedX, clampedY, clampedWidth, clampedHeight);
-                    }
-                    
-                    if (showLabels) {
-                        // 绘制标签
-                        const label = `${detection.className} ${(detection.confidence * 100).toFixed(1)}%`;
-                        this.ctx.font = 'bold 16px Arial';
-                        const textMetrics = this.ctx.measureText(label);
-                        const textWidth = textMetrics.width + 8;
-                        const textHeight = 24;
-                        
-                        // 标签背景
-                        this.ctx.fillStyle = color;
-                        this.ctx.fillRect(clampedX, clampedY - textHeight, textWidth, textHeight);
-                        
-                        // 标签文字
-                        this.ctx.fillStyle = 'white';
-                        this.ctx.fillText(label, clampedX + 4, clampedY - 6);
-                    }
-                    
-                    if (this.debugMode) {
-                        // 调试信息：显示中心点
-                        this.ctx.fillStyle = 'red';
-                        this.ctx.fillRect(x + width/2 - 2, y + height/2 - 2, 4, 4);
-                    }
-                });
-            }
 
-            drawVideoFrame() {
-                if (!this.video.videoWidth || !this.video.videoHeight) return;
-                
+                // 绘制视频帧
                 const videoWidth = this.video.videoWidth;
                 const videoHeight = this.video.videoHeight;
                 const aspectRatio = videoWidth / videoHeight;
-                
+
                 let sourceX = 0, sourceY = 0, sourceWidth = videoWidth, sourceHeight = videoHeight;
-                
-                // 居中裁剪
+
                 if (aspectRatio > 1) {
                     sourceWidth = videoHeight;
                     sourceX = (videoWidth - sourceWidth) / 2;
@@ -538,32 +584,47 @@
                     sourceHeight = videoWidth;
                     sourceY = (videoHeight - sourceHeight) / 2;
                 }
-                
+
                 this.ctx.drawImage(
                     this.video,
                     sourceX, sourceY, sourceWidth, sourceHeight,
-                    0, 0, this.canvas.width, this.canvas.height
+                    0, 0, 640, 640
                 );
-            }
 
-            updateDetectionDetails(detections) {
-                const detectionList = document.getElementById('detectionList');
-                
-                if (detections.length === 0) {
-                    detectionList.innerHTML = '暂无检测结果';
-                    return;
-                }
-                
-                const detectionHTML = detections.map(detection => 
-                    `<div class="detection-item">
-                        ${detection.className} (${(detection.confidence * 100).toFixed(1)}%)
-                    </div>`
-                ).join('');
-                
-                detectionList.innerHTML = detectionHTML;
+                // 绘制检测框
+                detections.forEach((detection, index) => {
+                    const x = detection.x * 640;
+                    const y = detection.y * 640;
+                    const width = detection.width * 640;
+                    const height = detection.height * 640;
+
+                    // 设置颜色
+                    const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#98D8C8'];
+                    const color = colors[detection.classId % colors.length];
+
+                    // 绘制边框
+                    this.ctx.strokeStyle = color;
+                    this.ctx.lineWidth = 3;
+                    this.ctx.strokeRect(x, y, width, height);
+
+                    // 绘制标签背景
+                    const label = `${detection.className} ${(detection.confidence * 100).toFixed(1)}%`;
+                    this.ctx.font = '16px Arial';
+                    const textMetrics = this.ctx.measureText(label);
+                    const textWidth = textMetrics.width;
+                    const textHeight = 20;
+
+                    this.ctx.fillStyle = color;
+                    this.ctx.fillRect(x, y - textHeight - 4, textWidth + 8, textHeight + 4);
+
+                    // 绘制标签文字
+                    this.ctx.fillStyle = 'white';
+                    this.ctx.fillText(label, x + 4, y - 8);
+                });
             }
 
             updatePerformanceMetrics(processingTime, objectCount) {
+                // 更新FPS
                 this.frameCount++;
                 const currentTime = performance.now();
                 if (currentTime - this.lastTime >= 1000) {
@@ -571,7 +632,8 @@
                     this.frameCount = 0;
                     this.lastTime = currentTime;
                 }
-                
+
+                // 更新UI
                 document.getElementById('fpsDisplay').textContent = this.fps;
                 document.getElementById('processingTime').textContent = `${processingTime.toFixed(1)}ms`;
                 document.getElementById('objectCount').textContent = objectCount;
