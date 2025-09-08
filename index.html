@@ -35,11 +35,14 @@
     }
 
     async function loadModel() {
-      // 在线可访问的 YOLOv8n TF.js 模型
       const modelUrl = 'https://hyuto.github.io/yolov8-tfjs/yolov8n_web_model/model.json';
-      const model = await tf.loadGraphModel(modelUrl);
-      console.log('Model loaded:', model);
-      return model;
+      try {
+        const model = await tf.loadGraphModel(modelUrl);
+        console.log('Model loaded:', model);
+        return model;
+      } catch (err) {
+        alert('模型加载失败，请检查模型 URL 或网络：' + err);
+      }
     }
 
     function drawPredictions(predictions, canvas, video) {
@@ -61,17 +64,34 @@
     }
 
     async function runDetection(video, model, canvas) {
-      const inputTensor = tf.browser.fromPixels(video).resizeBilinear([640, 640]).div(255).expandDims(0);
-      const output = await model.executeAsync(inputTensor);
+      tf.engine().startScope();
 
-      // YOLOv8 输出处理
-      const boxes = output[0].arraySync(); // [num_boxes, 4]
-      const scores = output[1].arraySync(); // [num_boxes]
-      const classes = output[2].arraySync(); // [num_boxes]
+      const inputTensor = tf.browser.fromPixels(video)
+        .resizeBilinear([640, 640])
+        .div(255)
+        .expandDims(0);
+
+      let output;
+      try {
+        output = await model.executeAsync(inputTensor);
+      } catch (err) {
+        console.error('推理失败:', err);
+        tf.engine().endScope();
+        return;
+      }
+
+      let boxes = [], scores = [], classes = [];
+      if (Array.isArray(output)) {
+        boxes = output[0].arraySync();
+        scores = output[1].arraySync();
+        classes = output[2].arraySync();
+      } else {
+        console.warn('模型输出格式未知:', output);
+      }
 
       const predictions = [];
       for (let i = 0; i < boxes.length; i++) {
-        if (scores[i] > 0.3) { // 阈值
+        if (scores[i] > 0.3) {
           const [x1, y1, x2, y2] = boxes[i];
           predictions.push({
             bbox: [
@@ -87,16 +107,18 @@
       }
 
       drawPredictions(predictions, canvas, video);
-      inputTensor.dispose();
-      output.forEach(t => t.dispose());
+
+      tf.dispose(inputTensor);
+      if (Array.isArray(output)) output.forEach(t => t.dispose());
+      tf.engine().endScope();
     }
 
     async function runDemo() {
       const video = await initCamera();
       const canvas = document.getElementById('canvas');
       const model = await loadModel();
+      if (!model) return;
 
-      // 每帧检测
       async function detectLoop() {
         await runDetection(video, model, canvas);
         requestAnimationFrame(detectLoop);
