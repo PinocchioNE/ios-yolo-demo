@@ -1,85 +1,86 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>YOLOv8 TF.js iPhone Demo</title>
-<style>
-  body { margin: 0; overflow: hidden; font-family: sans-serif; }
-  video, canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
-</style>
+  <meta charset="UTF-8">
+  <title>YOLO Demo</title>
+  <!-- TensorFlow.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0/dist/tf.min.js"></script>
+  <!-- 额外可选：用于模型可视化或处理 -->
+  <style>
+    video, canvas {
+      width: 640px;
+      height: 480px;
+      border: 1px solid #333;
+    }
+  </style>
 </head>
 <body>
+  <h1>YOLO Demo</h1>
+  <video id="video" autoplay muted></video>
+  <canvas id="canvas"></canvas>
 
-<video id="video" autoplay muted playsinline></video>
-<canvas id="canvas"></canvas>
-
-<script type="module">
-import * as tf from 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.8.0/dist/tf.min.js';
-
-// YOLOv8n TF.js 模型 CDN
-const MODEL_URL = 'https://huggingface.co/ultralytics/yolov8n-tfjs/resolve/main/model.json';
-const model = await tf.loadGraphModel(MODEL_URL);
-
-const video = document.getElementById('video');
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
-
-// 打开手机摄像头
-async function setupCamera() {
-    const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' }, // 后置摄像头
-        audio: false
-    });
-    video.srcObject = stream;
-    return new Promise(resolve => {
-        video.onloadedmetadata = () => {
+  <script>
+    async function initCamera() {
+      const video = document.getElementById('video');
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        video.srcObject = stream;
+        return new Promise((resolve) => {
+          video.onloadedmetadata = () => {
             video.play();
             resolve(video);
-        };
-    });
-}
-
-// YOLO 推理
-async function detectFrame() {
-    if (video.readyState < 2) {
-        requestAnimationFrame(detectFrame);
-        return;
+          };
+        });
+      } catch (err) {
+        alert('摄像头访问失败：' + err);
+      }
     }
 
-    const input = tf.browser.fromPixels(video).expandDims(0).toFloat().div(255);
-    const predictions = await model.executeAsync(input);
-
-    // 假设模型输出 boxes, scores, classes
-    const boxes = predictions[0].arraySync();
-    const scores = predictions[1].arraySync();
-    const classes = predictions[2].arraySync();
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-
-    for (let i = 0; i < scores.length; i++) {
-        if (scores[i] > 0.3) { // 阈值可调
-            const [y1, x1, y2, x2] = boxes[i];
-            ctx.strokeStyle = 'red';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(x1 * canvas.width, y1 * canvas.height,
-                           (x2 - x1) * canvas.width, (y2 - y1) * canvas.height);
-            ctx.fillStyle = 'red';
-            ctx.font = '16px sans-serif';
-            ctx.fillText(classes[i] + ' ' + (scores[i]*100).toFixed(1)+'%',
-                         x1 * canvas.width, y1 * canvas.height > 20 ? y1 * canvas.height - 5 : 10);
-        }
+    async function loadModel() {
+      // 使用官方 CDN YOLOv8n TF.js 模型
+      const modelUrl = 'https://cdn.jsdelivr.net/gh/ultralytics/assets/releases/download/v8.2.0/yolov8n/model.json';
+      const model = await tf.loadGraphModel(modelUrl);
+      console.log('Model loaded:', model);
+      return model;
     }
 
-    tf.dispose([input, ...predictions]);
-    requestAnimationFrame(detectFrame);
-}
+    function drawPredictions(predictions, canvas, video) {
+      const ctx = canvas.getContext('2d');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-await setupCamera();
-detectFrame();
-</script>
+      ctx.strokeStyle = 'red';
+      ctx.lineWidth = 2;
+      ctx.font = '18px Arial';
+      ctx.fillStyle = 'red';
 
+      predictions.forEach(pred => {
+        const [x, y, w, h] = pred.bbox; // 假设 pred.bbox = [x, y, width, height]
+        ctx.strokeRect(x, y, w, h);
+        ctx.fillText(pred.class + ' ' + (pred.score*100).toFixed(1) + '%', x, y > 10 ? y-5 : 10);
+      });
+    }
+
+    async function runDemo() {
+      const video = await initCamera();
+      const canvas = document.getElementById('canvas');
+      const model = await loadModel();
+
+      // 简单循环示例：实际检测需要对每帧进行预处理
+      setInterval(async () => {
+        // TODO: 替换成你的 YOLO 推理逻辑
+        // 这里演示随机框
+        const predictions = [{
+          bbox: [50, 50, 200, 150],
+          class: 'demo',
+          score: 0.85
+        }];
+        drawPredictions(predictions, canvas, video);
+      }, 1000); // 每秒更新一次
+    }
+
+    window.onload = runDemo;
+  </script>
 </body>
 </html>
