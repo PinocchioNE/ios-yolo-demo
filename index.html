@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>YOLOv8 TF.js Demo</title>
+  <title>YOLOv8 Demo</title>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0/dist/tf.min.js"></script>
   <style>
     video, canvas {
@@ -13,7 +13,7 @@
   </style>
 </head>
 <body>
-  <h1>YOLOv8 TF.js Demo</h1>
+  <h1>YOLOv8 Demo</h1>
   <video id="video" autoplay muted></video>
   <canvas id="canvas"></canvas>
 
@@ -21,7 +21,7 @@
     async function initCamera() {
       const video = document.getElementById('video');
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
         video.srcObject = stream;
         return new Promise(resolve => {
           video.onloadedmetadata = () => {
@@ -35,6 +35,7 @@
     }
 
     async function loadModel() {
+      // 在线可访问的 YOLOv8n TF.js 模型
       const modelUrl = 'https://hyuto.github.io/yolov8-tfjs/yolov8n_web_model/model.json';
       const model = await tf.loadGraphModel(modelUrl);
       console.log('Model loaded:', model);
@@ -49,7 +50,7 @@
 
       ctx.strokeStyle = 'red';
       ctx.lineWidth = 2;
-      ctx.font = '16px Arial';
+      ctx.font = '18px Arial';
       ctx.fillStyle = 'red';
 
       predictions.forEach(pred => {
@@ -59,45 +60,48 @@
       });
     }
 
+    async function runDetection(video, model, canvas) {
+      const inputTensor = tf.browser.fromPixels(video).resizeBilinear([640, 640]).div(255).expandDims(0);
+      const output = await model.executeAsync(inputTensor);
+
+      // YOLOv8 输出处理
+      const boxes = output[0].arraySync(); // [num_boxes, 4]
+      const scores = output[1].arraySync(); // [num_boxes]
+      const classes = output[2].arraySync(); // [num_boxes]
+
+      const predictions = [];
+      for (let i = 0; i < boxes.length; i++) {
+        if (scores[i] > 0.3) { // 阈值
+          const [x1, y1, x2, y2] = boxes[i];
+          predictions.push({
+            bbox: [
+              x1 * video.videoWidth,
+              y1 * video.videoHeight,
+              (x2 - x1) * video.videoWidth,
+              (y2 - y1) * video.videoHeight
+            ],
+            score: scores[i],
+            class: classes[i].toString()
+          });
+        }
+      }
+
+      drawPredictions(predictions, canvas, video);
+      inputTensor.dispose();
+      output.forEach(t => t.dispose());
+    }
+
     async function runDemo() {
       const video = await initCamera();
       const canvas = document.getElementById('canvas');
       const model = await loadModel();
 
-      async function detectFrame() {
-        tf.engine().startScope();
-
-        // 把 video 转成 Tensor
-        const imgTensor = tf.browser.fromPixels(video).expandDims(0).toFloat().div(255.0);
-
-        // 调用模型
-        const outputs = await model.executeAsync(imgTensor);
-
-        // YOLOv8 TF.js 输出解析，可能包含 boxes, scores, classes
-        // 假设 outputs[0]=boxes, outputs[1]=scores, outputs[2]=classIds
-        const boxes = outputs[0].arraySync()[0];      // [N,4] -> [x1,y1,x2,y2]
-        const scores = outputs[1].arraySync()[0];     // [N]
-        const classes = outputs[2].arraySync()[0];    // [N]
-
-        const predictions = [];
-        for(let i=0; i<scores.length; i++){
-          if(scores[i] > 0.3){ // 阈值，可调
-            const [x1,y1,x2,y2] = boxes[i];
-            predictions.push({
-              bbox: [x1, y1, x2-x1, y2-y1],
-              class: classes[i].toString(),
-              score: scores[i]
-            });
-          }
-        }
-
-        drawPredictions(predictions, canvas, video);
-
-        tf.engine().endScope();
-        requestAnimationFrame(detectFrame);
+      // 每帧检测
+      async function detectLoop() {
+        await runDetection(video, model, canvas);
+        requestAnimationFrame(detectLoop);
       }
-
-      detectFrame();
+      detectLoop();
     }
 
     window.onload = runDemo;
