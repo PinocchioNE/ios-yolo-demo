@@ -38,7 +38,7 @@
 
     async function loadModel() {
       // 使用官方 CDN YOLOv8n TF.js 模型
-      const modelUrl = 'https://cdn.jsdelivr.net/gh/ultralytics/assets/releases/download/v8.2.0/yolov8n/model.json';
+      const modelUrl = 'https://hyuto.github.io/yolov8-tfjs/yolov8n_web_model/model.json';
       const model = await tf.loadGraphModel(modelUrl);
       console.log('Model loaded:', model);
       return model;
