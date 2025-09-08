@@ -2,25 +2,27 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>YOLOv8 TF.js Demo</title>
+  <title>YOLOv8 TF.js Demo - Fixed</title>
   <style>
     video, canvas { border: 1px solid black; }
     .container { display: flex; gap: 20px; }
     .controls { margin: 10px 0; }
+    .debug { margin: 10px 0; font-family: monospace; font-size: 12px; }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
 </head>
 <body>
-  <h2>YOLOv8 TF.js Demo</h2>
+  <h2>YOLOv8 TF.js Demo - Fixed Version</h2>
   <div class="controls">
     <button id="switchBtn">切换摄像头</button>
-    <span>置信度阈值: <input type="range" id="confSlider" min="0.1" max="0.9" step="0.05" value="0.25"> <span id="confValue">0.25</span></span>
+    <span>置信度阈值: <input type="range" id="confSlider" min="0.01" max="0.9" step="0.01" value="0.25"> <span id="confValue">0.25</span></span>
   </div>
   <div class="container">
     <video id="video" autoplay playsinline width="640" height="480"></video>
     <canvas id="canvas" width="640" height="480"></canvas>
   </div>
   <div id="status">加载中...</div>
+  <div class="debug" id="debug">调试信息将显示在这里</div>
 
   <script>
     // COCO数据集类别名称
@@ -50,8 +52,14 @@
       let isDetecting = false;
       
       const statusDiv = document.getElementById('status');
+      const debugDiv = document.getElementById('debug');
       const confSlider = document.getElementById('confSlider');
       const confValue = document.getElementById('confValue');
+
+      function updateDebug(message) {
+        debugDiv.textContent = message;
+        console.log(message);
+      }
 
       // 置信度滑块事件
       confSlider.addEventListener('input', (e) => {
@@ -65,7 +73,6 @@
           statusDiv.textContent = '正在加载模型...';
           model = await tf.loadGraphModel('https://pinocchione.github.io/ios-yolo-demo/yolov8n_web_model/model.json');
           console.log('模型加载完成');
-          console.log('模型输入形状:', model.inputs[0].shape);
           statusDiv.textContent = '模型加载完成，正在启动摄像头...';
         } catch (error) {
           console.error('模型加载失败:', error);
@@ -114,11 +121,10 @@
       // 绘制检测框
       function drawBoxes(boxes) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        
-        // 绘制视频帧
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         
-        // 绘制检测框
+        updateDebug(`检测到 ${boxes.length} 个对象`);
+        
         boxes.forEach(box => {
           const [x1, y1, x2, y2, score, classId] = box;
           const className = classNames[classId] || `Class ${classId}`;
@@ -143,14 +149,10 @@
         });
       }
 
-      // 处理模型输出
+      // 修复后的输出处理函数
       async function processOutput(predictions) {
         try {
-          // 获取预测数据
           let output = predictions;
-          
-          // 检查输出形状并进行必要的转换
-          console.log('原始输出形状:', output.shape);
           
           // 如果输出是 [1, 84, 8400] 格式，转换为 [1, 8400, 84]
           if (output.shape.length === 3 && output.shape[1] === 84) {
@@ -158,54 +160,61 @@
           }
           
           const data = await output.data();
-          const numDetections = output.shape[1]; // 通常是8400
-          const numClasses = output.shape[2] - 5; // 减去x,y,w,h,objectness
-          
-          console.log(`处理 ${numDetections} 个检测结果，${numClasses} 个类别`);
+          const numDetections = output.shape[1]; // 8400
           
           const boxes = [];
           const scores = [];
           const classIds = [];
           
+          let validDetections = 0;
+          let maxConfidence = 0;
+          
           // 解析每个检测结果
           for (let i = 0; i < numDetections; i++) {
-            const offset = i * (numClasses + 5);
+            const offset = i * 84;
             
-            // 获取边界框坐标 (中心点格式)
+            // YOLOv8输出格式：[x_center, y_center, width, height, class0_prob, class1_prob, ...]
             const centerX = data[offset];
             const centerY = data[offset + 1];
             const width = data[offset + 2];
             const height = data[offset + 3];
-            const objectness = data[offset + 4];
             
-            // 获取类别概率
+            // 获取所有类别概率（从索引4开始的80个类别）
             const classProbs = [];
-            for (let j = 0; j < numClasses; j++) {
-              classProbs.push(data[offset + 5 + j]);
+            for (let j = 4; j < 84; j++) {
+              classProbs.push(data[offset + j]);
             }
             
             // 找到最高概率的类别
             const maxClassProb = Math.max(...classProbs);
             const classId = classProbs.indexOf(maxClassProb);
             
-            // 计算最终置信度
-            const confidence = objectness * maxClassProb;
+            // YOLOv8直接输出类别概率，不需要乘以objectness
+            const confidence = maxClassProb;
             
-            // 过滤低置信度检测
-            if (confidence > confThreshold) {
-              // 转换为左上角坐标格式，并缩放到画布尺寸
-              const x1 = Math.max(0, (centerX - width / 2) * canvas.width);
-              const y1 = Math.max(0, (centerY - height / 2) * canvas.height);
-              const x2 = Math.min(canvas.width, (centerX + width / 2) * canvas.width);
-              const y2 = Math.min(canvas.height, (centerY + height / 2) * canvas.height);
+            if (confidence > maxConfidence) {
+              maxConfidence = confidence;
+            }
+            
+            // 使用更低的阈值进行初步筛选
+            if (confidence > 0.1) {
+              validDetections++;
               
-              boxes.push([y1, x1, y2, x2]); // NMS需要[y1,x1,y2,x2]格式
-              scores.push(confidence);
-              classIds.push(classId);
+              if (confidence > confThreshold) {
+                // 转换坐标到画布尺寸
+                const x1 = Math.max(0, (centerX - width / 2) * canvas.width);
+                const y1 = Math.max(0, (centerY - height / 2) * canvas.height);
+                const x2 = Math.min(canvas.width, (centerX + width / 2) * canvas.width);
+                const y2 = Math.min(canvas.height, (centerY + height / 2) * canvas.height);
+                
+                boxes.push([y1, x1, y2, x2]); // NMS需要[y1,x1,y2,x2]格式
+                scores.push(confidence);
+                classIds.push(classId);
+              }
             }
           }
           
-          console.log(`过滤后剩余 ${boxes.length} 个检测结果`);
+          console.log(`有效检测: ${validDetections}, 最高置信度: ${maxConfidence.toFixed(3)}, 通过阈值: ${boxes.length}`);
           
           if (boxes.length === 0) {
             return [];
@@ -218,7 +227,7 @@
           const selectedIndices = await tf.image.nonMaxSuppressionAsync(
             boxesTensor,
             scoresTensor,
-            50, // 最大检测数量
+            50,
             iouThreshold,
             confThreshold
           );
@@ -245,7 +254,6 @@
           scoresTensor.dispose();
           selectedIndices.dispose();
           
-          console.log(`NMS后剩余 ${finalBoxes.length} 个检测结果`);
           return finalBoxes;
           
         } catch (error) {
@@ -264,21 +272,18 @@
         isDetecting = true;
         
         try {
-          // 开始TensorFlow作用域
+          // 使用 tf.tidy 管理内存
           const result = tf.tidy(() => {
-            // 从视频获取输入
             const input = tf.browser.fromPixels(video)
-              .resizeBilinear([640, 640]) // 调整到模型输入尺寸
-              .expandDims(0) // 添加批次维度
-              .toFloat() // 转换为浮点数
-              .div(255.0); // 归一化到[0,1]
-            
-            console.log('输入张量形状:', input.shape);
+              .resizeBilinear([640, 640])
+              .expandDims(0)
+              .toFloat()
+              .div(255.0);
             return input;
           });
           
-          // 执行推理
-          const predictions = await model.executeAsync(result);
+          // 使用 execute 而不是 executeAsync（根据警告建议）
+          const predictions = model.execute(result);
           
           // 处理输出
           const boxes = await processOutput(predictions);
@@ -296,7 +301,7 @@
           
         } catch (error) {
           console.error('检测过程中出错:', error);
-          statusDiv.textContent = '检测出错: ' + error.message;
+          updateDebug('检测出错: ' + error.message);
         }
         
         isDetecting = false;
