@@ -1,151 +1,136 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-<meta charset="UTF-8">
-<title>YOLOv8 TF.js Demo</title>
-<style>
-  video, canvas { border: 1px solid black; }
-</style>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+    <meta charset="utf-8">
+    <title>YOLOv8-tfjs Demo</title>
+    <!-- 保留你之前的 tf.min.js -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
 </head>
 <body>
-<h2>YOLOv8 TF.js Demo</h2>
-<button id="switchBtn">切换摄像头</button>
-<br><br>
-<video id="video" autoplay playsinline></video>
-<canvas id="canvas"></canvas>
+<video id="video" width="640" height="480" autoplay muted></video>
+<canvas id="canvas" width="640" height="480"></canvas>
 
 <script>
-const confThreshold = 0.25; // 最低置信度
-const iouThreshold = 0.45;  // NMS 阈值
+async function setupCamera() {
+    const video = document.getElementById('video');
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    video.srcObject = stream;
+    return new Promise(resolve => {
+        video.onloadedmetadata = () => { resolve(video); };
+    });
+}
 
-// COCO类别名称
+function xywh2xyxy(box){
+    const [x, y, w, h] = box;
+    return [x - w/2, y - h/2, x + w/2, y + h/2];
+}
+
+// 简单 NMS
+function nonMaxSuppression(boxes, scores, iouThreshold=0.45) {
+    const picked = [];
+    const indexes = scores.map((s,i)=>[s,i]).sort((a,b)=>b[0]-a[0]).map(a=>a[1]);
+    while(indexes.length>0){
+        const i = indexes.shift();
+        picked.push(i);
+        const a = boxes[i];
+        indexes = indexes.filter(j=>{
+            const b = boxes[j];
+            const xx1 = Math.max(a[0], b[0]);
+            const yy1 = Math.max(a[1], b[1]);
+            const xx2 = Math.min(a[2], b[2]);
+            const yy2 = Math.min(a[3], b[3]);
+            const w = Math.max(0, xx2-xx1);
+            const h = Math.max(0, yy2-yy1);
+            const inter = w*h;
+            const union = (a[2]-a[0])*(a[3]-a[1]) + (b[2]-b[0])*(b[3]-b[1]) - inter;
+            const iou = inter/union;
+            return iou < iouThreshold;
+        });
+    }
+    return picked;
+}
+
+// COCO 类名列表（对应 yolov8n 默认训练）
 const COCO_CLASSES = [
-  'person','bicycle','car','motorcycle','airplane','bus','train','truck','boat','traffic light',
-  'fire hydrant','stop sign','parking meter','bench','bird','cat','dog','horse','sheep','cow',
-  'elephant','bear','zebra','giraffe','backpack','umbrella','handbag','tie','suitcase','frisbee',
-  'skis','snowboard','sports ball','kite','baseball bat','baseball glove','skateboard','surfboard','tennis racket','bottle',
-  'wine glass','cup','fork','knife','spoon','bowl','banana','apple','sandwich','orange',
-  'broccoli','carrot','hot dog','pizza','donut','cake','chair','couch','potted plant','bed',
-  'dining table','toilet','TV','laptop','mouse','remote','keyboard','cell phone','microwave','oven',
-  'toaster','sink','refrigerator','book','clock','vase','scissors','teddy bear','hair drier','toothbrush'
+    "person","bicycle","car","motorcycle","airplane","bus","train","truck",
+    "boat","traffic light","fire hydrant","stop sign","parking meter","bench",
+    "bird","cat","dog","horse","sheep","cow","elephant","bear","zebra",
+    "giraffe","backpack","umbrella","handbag","tie","suitcase","frisbee",
+    "skis","snowboard","sports ball","kite","baseball bat","baseball glove",
+    "skateboard","surfboard","tennis racket","bottle","wine glass","cup",
+    "fork","knife","spoon","bowl","banana","apple","sandwich","orange",
+    "broccoli","carrot","hot dog","pizza","donut","cake","chair","couch",
+    "potted plant","bed","dining table","toilet","tv","laptop","mouse",
+    "remote","keyboard","cell phone","microwave","oven","toaster","sink",
+    "refrigerator","book","clock","vase","scissors","teddy bear","hair drier","toothbrush"
 ];
 
-window.onload = async () => {
-  let model;
-  let video = document.getElementById('video');
-  let canvas = document.getElementById('canvas');
-  let ctx = canvas.getContext('2d');
-  let useFrontCamera = false;
-  let currentStream;
+async function run() {
+    const video = await setupCamera();
+    video.play();
 
-  // 加载模型
-  async function loadModel() {
-    model = await tf.loadGraphModel('https://pinocchione.github.io/ios-yolo-demo/yolov8n_web_model/model.json');
-    console.log('模型加载完成');
-  }
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
 
-  // 启动摄像头
-  async function startCamera() {
-    if (currentStream) currentStream.getTracks().forEach(t=>t.stop());
-    const constraints = { audio: false, video: { facingMode: useFrontCamera ? 'user' : 'environment' } };
-    currentStream = await navigator.mediaDevices.getUserMedia(constraints);
-    video.srcObject = currentStream;
+    // 使用你之前的 model 路径
+    const model = await tf.loadGraphModel('https://pinocchione.github.io/ios-yolo-demo/yolov8n_web_model/model.json');
 
-    video.onloadedmetadata = () => {
-      video.play();
-      canvas.width = 640;
-      canvas.height = 640;
-      detectFrame();
-    };
-  }
+    const confThreshold = 0.25;
 
-  document.getElementById('switchBtn').addEventListener('click', () => {
-    useFrontCamera = !useFrontCamera;
-    startCamera();
-  });
+    async function detectFrame() {
+        tf.engine().startScope();
 
-  // 画框函数
-  function drawBoxes(boxes) {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    boxes.forEach(b => {
-      ctx.strokeStyle = 'red';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(b[0], b[1], b[2]-b[0], b[3]-b[1]);
-      ctx.fillStyle = 'red';
-      ctx.font = '16px Arial';
-      const className = COCO_CLASSES[b[5]] || 'unknown';
-      ctx.fillText(`${className} ${b[4].toFixed(2)}`, b[0], b[1]-5);
-    });
-  }
+        let input = tf.browser.fromPixels(video)
+            .resizeBilinear([640,640])
+            .div(255.0)
+            .expandDims(0); // [1,640,640,3]
 
-  // YOLO输出解析 + NMS
-  async function processOutput(pred) {
-    const data = pred.dataSync();
-    const numBoxes = data.length / 84;
-    const boxes = [];
-    const scores = [];
-    const classes = [];
+        const pred = await model.executeAsync(input); 
+        // 输出 shape: [1,num_boxes,85]，85=4+1+80
+        const data = pred.arraySync()[0]; // [num_boxes,85]
 
-    for (let i = 0; i < numBoxes; i++) {
-      const offset = i * 84;
-      const x = data[offset];
-      const y = data[offset+1];
-      const w = data[offset+2];
-      const h = data[offset+3];
-      const objScore = data[offset+4];
-      const classProbs = data.slice(offset+5, offset+84);
-      const classId = classProbs.indexOf(Math.max(...classProbs));
-      const classScore = classProbs[classId];
-      const score = objScore * classScore;
+        const boxes = [];
+        const scores = [];
+        const classes = [];
 
-      if (score > confThreshold) {
-        // 转换为左上右下坐标
-        const x1 = Math.max(0, (x - w/2) * 640);
-        const y1 = Math.max(0, (y - h/2) * 640);
-        const x2 = Math.min(640, (x + w/2) * 640);
-        const y2 = Math.min(640, (y + h/2) * 640);
-        boxes.push([y1, x1, y2, x2]); // tf.image.nonMaxSuppression 要求[y1,x1,y2,x2]
-        scores.push(score);
-        classes.push(classId);
-      }
+        data.forEach(d=>{
+            const objScore = d[4];
+            const classProbs = d.slice(5);
+            const classId = classProbs.indexOf(Math.max(...classProbs));
+            const score = objScore * classProbs[classId];
+            if(score>confThreshold){
+                const box = xywh2xyxy(d.slice(0,4));
+                boxes.push(box);
+                scores.push(score);
+                classes.push(classId);
+            }
+        });
+
+        const picked = nonMaxSuppression(boxes, scores, 0.45);
+
+        ctx.drawImage(video,0,0,canvas.width,canvas.height);
+
+        picked.forEach(i=>{
+            const [x1,y1,x2,y2] = boxes[i];
+            ctx.strokeStyle='red';
+            ctx.lineWidth=2;
+            ctx.strokeRect(x1*canvas.width/640, y1*canvas.height/640,
+                           (x2-x1)*canvas.width/640, (y2-y1)*canvas.height/640);
+            ctx.fillStyle='red';
+            ctx.font='18px Arial';
+            ctx.fillText(`${COCO_CLASSES[classes[i]]} ${scores[i].toFixed(2)}`, 
+                         x1*canvas.width/640, y1*canvas.height/640-5);
+        });
+
+        tf.dispose([input, pred]);
+        requestAnimationFrame(detectFrame);
+        tf.engine().endScope();
     }
 
-    if (boxes.length === 0) return [];
+    detectFrame();
+}
 
-    const tfBoxes = tf.tensor2d(boxes);
-    const tfScores = tf.tensor1d(scores);
-    const selected = await tf.image.nonMaxSuppressionAsync(tfBoxes, tfScores, 50, iouThreshold, confThreshold);
-
-    const selectedBoxes = selected.arraySync().map(i => {
-      const b = boxes[i];
-      return [b[1], b[0], b[3], b[2], scores[i], classes[i]]; // [x1,y1,x2,y2,score,classId]
-    });
-
-    tfBoxes.dispose();
-    tfScores.dispose();
-    selected.dispose();
-
-    return selectedBoxes;
-  }
-
-  async function detectFrame() {
-    if (!model) return requestAnimationFrame(detectFrame);
-
-    tf.engine().startScope();
-    const input = tf.browser.fromPixels(video).resizeBilinear([640,640]).expandDims(0).toFloat();
-    const pred = await model.executeAsync({x: input});
-    const boxes = await processOutput(pred);
-    drawBoxes(boxes);
-    tf.engine().endScope();
-
-    requestAnimationFrame(detectFrame);
-  }
-
-  await loadModel();
-  await startCamera();
-};
+run();
 </script>
 </body>
 </html>
