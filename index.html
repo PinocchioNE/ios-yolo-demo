@@ -6,7 +6,6 @@
 <style>
   video, canvas { border: 1px solid black; }
 </style>
-<!-- 用官方 jsDelivr 加载 TF.js -->
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
 </head>
 <body>
@@ -17,13 +16,16 @@
 <canvas id="canvas"></canvas>
 
 <script>
-window.onload = async () => {  // 等页面和 TF.js 都加载完再执行
+window.onload = async () => {
   let model;
   let video = document.getElementById('video');
   let canvas = document.getElementById('canvas');
   let ctx = canvas.getContext('2d');
-  let useFrontCamera = false; // false=后置, true=前置
+  let useFrontCamera = false; 
   let currentStream;
+
+  // 类别名，可根据模型自己改
+  const classNames = ["person","bicycle","car","motorbike","aeroplane","bus","train","truck","boat","traffic light"];
 
   // 加载模型
   async function loadModel() {
@@ -58,30 +60,47 @@ window.onload = async () => {  // 等页面和 TF.js 都加载完再执行
 
     tf.engine().startScope();
 
-    // 缩放视频到 640x640
+    // 视频 -> tensor
     let input = tf.browser.fromPixels(video)
                   .resizeBilinear([640, 640])
                   .expandDims(0)
                   .toFloat();
 
-    // 执行推理
+    // 推理
     const outputs = await model.executeAsync({x: input});
+    const data = outputs.arraySync(); // [N,6]: x1,y1,x2,y2,score,class
 
     // 清空画布
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // 绘制视频
     ctx.drawImage(video, 0, 0, 640, 640);
 
-    // 输出结果
-    console.log(outputs);
+    // 绘制检测框
+    for (let i=0; i<data.length; i++) {
+      let [x1, y1, x2, y2, score, cls] = data[i];
+      if (score < 0.3) continue; // 置信度阈值
+
+      // 坐标转换为像素
+      x1 *= canvas.width; x2 *= canvas.width;
+      y1 *= canvas.height; y2 *= canvas.height;
+
+      // 框
+      ctx.strokeStyle = 'red';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+
+      // 标签
+      ctx.fillStyle = 'red';
+      ctx.font = '18px Arial';
+      const label = `${classNames[cls] || cls} ${(score*100).toFixed(1)}%`;
+      ctx.fillText(label, x1, y1>20?y1-5:y1+20);
+    }
 
     tf.engine().endScope();
     requestAnimationFrame(detectFrame);
   }
 
-  await loadModel();   // 先确保模型加载完
-  await startCamera(); // 再启动摄像头
+  await loadModel();
+  await startCamera();
 };
 </script>
 </body>
