@@ -347,7 +347,7 @@
                 updateStatus('正在加载YOLO模型...', 'loading');
                 document.getElementById('modelStatus').textContent = '加载中...';
 
-                const modelUrl = 'https://pinocchione.github.io/ios-yolo-demo/yolov8n_web_model/model.json';
+                const modelUrl = 'https://cdn.jsdelivr.net/gh/pinocchione/ios-yolo-demo/yolov8n_web_model/model.json';
                 model = await tf.loadGraphModel(modelUrl);
 
                 // 预热模型
