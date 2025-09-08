@@ -63,6 +63,7 @@
             justify-content: center;
             gap: 10px;
             margin-bottom: 20px;
+            flex-wrap: wrap;
         }
         button {
             padding: 10px 20px;
@@ -70,6 +71,7 @@
             border-radius: 5px;
             cursor: pointer;
             font-size: 14px;
+            min-width: 100px;
         }
         .btn-primary {
             background-color: #007bff;
@@ -78,6 +80,14 @@
         .btn-secondary {
             background-color: #6c757d;
             color: white;
+        }
+        .btn-info {
+            background-color: #17a2b8;
+            color: white;
+        }
+        .btn-warning {
+            background-color: #ffc107;
+            color: #212529;
         }
         .info-panel {
             display: grid;
@@ -139,6 +149,15 @@
             font-size: 14px;
             color: #856404;
         }
+        .memory-info {
+            background: #d1ecf1;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            text-align: center;
+            font-size: 12px;
+            color: #0c5460;
+        }
         @media (max-width: 768px) {
             .container {
                 margin: 10px;
@@ -146,6 +165,14 @@
             }
             .info-panel {
                 grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            }
+            .controls {
+                gap: 5px;
+            }
+            button {
+                padding: 8px 12px;
+                font-size: 12px;
+                min-width: 80px;
             }
         }
     </style>
@@ -155,7 +182,11 @@
         <div class="header">
             <h1>YOLOv8 TensorFlow.js 实时目标检测</h1>
             <div class="model-info">
-                xth_yolo_phone_test
+                xth_yolo_use_based_cellPhone
+            </div>
+            <div class="memory-info">
+                <span id="memoryInfo">内存使用: 0MB</span> | 
+                <span id="tensorInfo">张量数量: 0</span>
             </div>
             <div id="status" class="status loading">正在初始化...</div>
         </div>
@@ -163,12 +194,14 @@
         <div class="controls">
             <button id="startBtn" class="btn-primary">开始检测</button>
             <button id="stopBtn" class="btn-secondary" disabled>停止检测</button>
+            <button id="switchCameraBtn" class="btn-info" disabled>切换摄像头</button>
+            <button id="clearMemoryBtn" class="btn-warning">清理内存</button>
         </div>
 
         <div class="video-container">
             <div class="video-wrapper">
                 <video id="videoElement" autoplay muted playsinline></video>
-                <div class="video-label">摄像头输入</div>
+                <div class="video-label">摄像头输入 (<span id="cameraType">前置</span>)</div>
             </div>
             <div class="video-wrapper">
                 <canvas id="outputCanvas"></canvas>
@@ -208,6 +241,12 @@
         let fps = 0;
         let frameCount = 0;
         let lastTime = performance.now();
+        let currentStream = null;
+        let facingMode = 'user'; // 'user' for front camera, 'environment' for back camera
+        let detectionInterval = null;
+        let memoryCheckInterval = null;
+        let frameSkipCount = 0;
+        const FRAME_SKIP = 3; // 每3帧处理一次，降低处理频率
 
         // COCO数据集的80个类别名称
         const classNames = [
@@ -233,6 +272,7 @@
                 await setupCamera();
                 await loadModel();
                 setupEventListeners();
+                startMemoryMonitoring();
                 updateStatus('初始化完成，点击开始检测', 'ready');
             } catch (error) {
                 console.error('初始化失败:', error);
@@ -241,33 +281,65 @@
         }
 
         async function setupCamera() {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: {
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 },
-                    frameRate: { ideal: 30 }
+            try {
+                // 停止当前流
+                if (currentStream) {
+                    currentStream.getTracks().forEach(track => track.stop());
                 }
-            });
 
-            video.srcObject = stream;
-
-            return new Promise((resolve) => {
-                video.onloadedmetadata = () => {
-                    // 设置canvas尺寸与video保持一致
-                    const aspectRatio = video.videoWidth / video.videoHeight;
-                    const maxWidth = 640;
-                    const maxHeight = 480;
-                    
-                    if (aspectRatio > maxWidth / maxHeight) {
-                        canvas.width = maxWidth;
-                        canvas.height = maxWidth / aspectRatio;
-                    } else {
-                        canvas.height = maxHeight;
-                        canvas.width = maxHeight * aspectRatio;
+                const constraints = {
+                    video: {
+                        facingMode: facingMode,
+                        width: { ideal: 1280, max: 1920 },
+                        height: { ideal: 720, max: 1080 },
+                        frameRate: { ideal: 15, max: 30 } // 降低帧率减少负担
                     }
-                    resolve();
                 };
-            });
+
+                currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = currentStream;
+
+                return new Promise((resolve) => {
+                    video.onloadedmetadata = () => {
+                        // 设置canvas尺寸与video保持一致
+                        const aspectRatio = video.videoWidth / video.videoHeight;
+                        const maxWidth = 640;
+                        const maxHeight = 480;
+                        
+                        if (aspectRatio > maxWidth / maxHeight) {
+                            canvas.width = maxWidth;
+                            canvas.height = maxWidth / aspectRatio;
+                        } else {
+                            canvas.height = maxHeight;
+                            canvas.width = maxHeight * aspectRatio;
+                        }
+                        
+                        // 更新摄像头类型显示
+                        document.getElementById('cameraType').textContent = 
+                            facingMode === 'user' ? '前置' : '后置';
+                        
+                        document.getElementById('switchCameraBtn').disabled = false;
+                        resolve();
+                    };
+                });
+            } catch (error) {
+                console.error('摄像头设置失败:', error);
+                throw error;
+            }
+        }
+
+        async function switchCamera() {
+            try {
+                updateStatus('正在切换摄像头...', 'loading');
+                facingMode = facingMode === 'user' ? 'environment' : 'user';
+                await setupCamera();
+                updateStatus(isDetecting ? '检测中...' : '摄像头切换完成', 'ready');
+            } catch (error) {
+                console.error('摄像头切换失败:', error);
+                updateStatus('摄像头切换失败: ' + error.message, 'error');
+                // 回退到原来的摄像头
+                facingMode = facingMode === 'user' ? 'environment' : 'user';
+            }
         }
 
         async function loadModel() {
@@ -275,7 +347,6 @@
                 updateStatus('正在加载YOLO模型...', 'loading');
                 document.getElementById('modelStatus').textContent = '加载中...';
 
-                // 替换为你的实际模型URL
                 const modelUrl = 'https://pinocchione.github.io/ios-yolo-demo/yolov8n_web_model/model.json';
                 model = await tf.loadGraphModel(modelUrl);
 
@@ -296,6 +367,18 @@
         function setupEventListeners() {
             document.getElementById('startBtn').addEventListener('click', startDetection);
             document.getElementById('stopBtn').addEventListener('click', stopDetection);
+            document.getElementById('switchCameraBtn').addEventListener('click', switchCamera);
+            document.getElementById('clearMemoryBtn').addEventListener('click', clearMemory);
+            
+            // 页面隐藏时停止检测
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden && isDetecting) {
+                    stopDetection();
+                }
+            });
+            
+            // 页面卸载时清理资源
+            window.addEventListener('beforeunload', cleanup);
         }
 
         function startDetection() {
@@ -317,12 +400,26 @@
             document.getElementById('startBtn').disabled = false;
             document.getElementById('stopBtn').disabled = true;
             updateStatus('检测已停止', 'ready');
+            
+            // 清理检测间隔
+            if (detectionInterval) {
+                clearTimeout(detectionInterval);
+                detectionInterval = null;
+            }
         }
 
         async function detectLoop() {
             if (!isDetecting) return;
 
             try {
+                // 跳帧处理，降低处理频率
+                frameSkipCount++;
+                if (frameSkipCount < FRAME_SKIP) {
+                    detectionInterval = setTimeout(detectLoop, 33); // ~30fps
+                    return;
+                }
+                frameSkipCount = 0;
+
                 const startTime = performance.now();
 
                 // 预处理图像
@@ -341,7 +438,7 @@
                 const processingTime = performance.now() - startTime;
                 updatePerformanceMetrics(processingTime, detections.length);
 
-                // 清理内存
+                // 立即清理内存
                 inputTensor.dispose();
                 if (Array.isArray(predictions)) {
                     predictions.forEach(tensor => tensor.dispose());
@@ -349,11 +446,23 @@
                     predictions.dispose();
                 }
 
+                // 定期强制垃圾回收
+                if (frameCount % 30 === 0) {
+                    await tf.nextFrame();
+                }
+
             } catch (error) {
                 console.error('检测过程出错:', error);
+                // 错误恢复：停止检测并清理内存
+                stopDetection();
+                clearMemory();
+                updateStatus('检测出错，已自动停止: ' + error.message, 'error');
             }
 
-            requestAnimationFrame(detectLoop);
+            // 使用setTimeout而不是requestAnimationFrame，更好控制频率
+            if (isDetecting) {
+                detectionInterval = setTimeout(detectLoop, 100); // 10fps，降低处理频率
+            }
         }
 
         function preprocessImage() {
@@ -385,13 +494,9 @@
             const outputData = await output.data();
             const outputShape = output.shape;
             
-            console.log('模型输出形状:', outputShape);
-            console.log('输出数据长度:', outputData.length);
-            
             const detections = [];
             
             // YOLOv8输出格式通常是 [1, 84, 8400] 或类似格式
-            // 其中84 = 4(坐标) + 80(类别)
             if (outputShape.length === 3) {
                 const [batchSize, numClasses, numBoxes] = outputShape;
                 
@@ -411,14 +516,14 @@
                         const classScore = outputData[j * numBoxes + i];
                         if (classScore > maxClassScore) {
                             maxClassScore = classScore;
-                            classId = j - 4; // 减去坐标的4个维度
+                            classId = j - 4;
                         }
                     }
                     
-                    // 只保留高置信度的检测
-                    if (maxClassScore > 0.6) {
+                    // 提高置信度阈值，减少误检
+                    if (maxClassScore > 0.7) {
                         detections.push({
-                            x: (cx - w / 2) / 640, // 转换为归一化坐标
+                            x: (cx - w / 2) / 640,
                             y: (cy - h / 2) / 640,
                             width: w / 640,
                             height: h / 640,
@@ -429,7 +534,7 @@
                     }
                 }
             } else {
-                // 备用处理方式：假设是扁平化的格式
+                // 备用处理方式
                 const numDetections = Math.min(8400, Math.floor(outputData.length / 85));
                 
                 for (let i = 0; i < numDetections; i++) {
@@ -450,7 +555,7 @@
                         }
                     }
                     
-                    if (maxClassScore > 0.6) {
+                    if (maxClassScore > 0.7) {
                         detections.push({
                             x: (cx - w / 2) / 640,
                             y: (cy - h / 2) / 640,
@@ -470,7 +575,6 @@
         
         // 非极大值抑制函数
         function applyNMS(detections, iouThreshold) {
-            // 按置信度排序
             detections.sort((a, b) => b.confidence - a.confidence);
             
             const keep = [];
@@ -491,7 +595,7 @@
                 }
             }
             
-            return keep;
+            return keep.slice(0, 20); // 限制最大检测数量
         }
         
         // 计算IoU
@@ -515,12 +619,11 @@
             // 清空canvas
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // 绘制视频帧到canvas，保持原始比例
+            // 绘制视频帧到canvas
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
             // 绘制检测框
             detections.forEach((detection) => {
-                // 将归一化坐标转换为canvas坐标
                 const x = detection.x * canvas.width;
                 const y = detection.y * canvas.height;
                 const width = detection.width * canvas.width;
@@ -528,24 +631,23 @@
 
                 // 绘制检测框
                 ctx.strokeStyle = '#FF0000';
-                ctx.lineWidth = 3;
+                ctx.lineWidth = 2;
                 ctx.strokeRect(x, y, width, height);
 
                 // 绘制标签
                 const label = `${detection.className} ${(detection.confidence * 100).toFixed(1)}%`;
                 ctx.fillStyle = '#FF0000';
-                ctx.font = '16px Arial';
+                ctx.font = '14px Arial';
 
                 // 标签背景
                 const textWidth = ctx.measureText(label).width;
-                ctx.fillRect(x, y - 25, textWidth + 10, 25);
+                ctx.fillRect(x, y - 20, textWidth + 8, 20);
 
                 // 标签文字
                 ctx.fillStyle = 'white';
-                ctx.fillText(label, x + 5, y - 5);
+                ctx.fillText(label, x + 4, y - 4);
             });
 
-            // 更新检测详情
             updateDetectionDetails(detections);
         }
 
@@ -582,6 +684,56 @@
             const statusElement = document.getElementById('status');
             statusElement.textContent = message;
             statusElement.className = `status ${type}`;
+        }
+
+        // 内存管理函数
+        function clearMemory() {
+            try {
+                // 强制垃圾回收
+                if (window.gc) {
+                    window.gc();
+                }
+                
+                // TensorFlow.js 内存清理
+                tf.disposeVariables();
+                tf.engine().startScope();
+                tf.engine().endScope();
+                
+                console.log('内存清理完成');
+                updateStatus('内存清理完成', 'ready');
+            } catch (error) {
+                console.error('内存清理失败:', error);
+            }
+        }
+
+        function startMemoryMonitoring() {
+            memoryCheckInterval = setInterval(() => {
+                const memInfo = tf.memory();
+                const memoryMB = (memInfo.numBytes / 1024 / 1024).toFixed(1);
+                
+                document.getElementById('memoryInfo').textContent = `内存使用: ${memoryMB}MB`;
+                document.getElementById('tensorInfo').textContent = `张量数量: ${memInfo.numTensors}`;
+                
+                // 内存使用过高时自动清理
+                if (memInfo.numBytes > 500 * 1024 * 1024) { // 500MB
+                    console.warn('内存使用过高，自动清理');
+                    clearMemory();
+                }
+            }, 2000);
+        }
+
+        function cleanup() {
+            stopDetection();
+            
+            if (currentStream) {
+                currentStream.getTracks().forEach(track => track.stop());
+            }
+            
+            if (memoryCheckInterval) {
+                clearInterval(memoryCheckInterval);
+            }
+            
+            clearMemory();
         }
 
         // 初始化
