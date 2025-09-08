@@ -2,78 +2,74 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>YOLOv8 Demo</title>
+  <title>YOLOv8 TF.js Demo</title>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0/dist/tf.min.js"></script>
   <style>
     video, canvas {
       width: 640px;
       height: 480px;
       border: 1px solid #333;
+      display: block;
+      margin-bottom: 10px;
     }
     button {
-      margin-top: 10px;
-      padding: 5px 10px;
+      margin-bottom: 10px;
     }
   </style>
 </head>
 <body>
-  <h1>YOLOv8 Demo</h1>
+  <h1>YOLOv8 TF.js Demo</h1>
+
+  <button id="switchBtn">切换摄像头</button>
   <video id="video" autoplay muted playsinline></video>
   <canvas id="canvas"></canvas>
-  <br>
-  <button id="switchCam">切换摄像头</button>
 
   <script>
-    let currentFacingMode = 'user'; // 默认前摄像头
-    let videoStream = null;
+    let video = document.getElementById('video');
+    let canvas = document.getElementById('canvas');
+    let ctx = canvas.getContext('2d');
+    let currentCamera = 'user'; // 'user' 前摄像头, 'environment' 后摄像头
+    let stream = null;
+    let model = null;
 
-    async function initCamera(facingMode) {
-      const video = document.getElementById('video');
-      if (videoStream) {
-        videoStream.getTracks().forEach(track => track.stop());
+    async function startCamera() {
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
       }
-      try {
-        videoStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode },
-        });
-        video.srcObject = videoStream;
-        return new Promise(resolve => {
-          video.onloadedmetadata = () => {
-            video.play();
-            resolve(video);
-          };
-        });
-      } catch (err) {
-        alert('摄像头访问失败：' + err);
-      }
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: currentCamera }
+      });
+      video.srcObject = stream;
     }
+
+    document.getElementById('switchBtn').addEventListener('click', async () => {
+      currentCamera = currentCamera === 'user' ? 'environment' : 'user';
+      await startCamera();
+    });
 
     async function loadModel() {
-      const modelUrl = 'https://hyuto.github.io/yolov8-tfjs/yolov8n_web_model/model.json';
-      const model = await tf.loadGraphModel(modelUrl);
-      console.log('Model loaded:', model);
-      return model;
+      console.log('加载模型...');
+      model = await tf.loadGraphModel('https://hyuto.github.io/yolov8-tfjs/yolov8n_web_model/model.json');
+      console.log('模型加载完成', model);
     }
 
-    function drawPredictions(predictions, canvas, video) {
-      const ctx = canvas.getContext('2d');
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-      ctx.strokeStyle = 'red';
+    function drawPredictions(predictions) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.lineWidth = 2;
-      ctx.font = '18px Arial';
+      ctx.font = '16px Arial';
+      ctx.strokeStyle = 'red';
       ctx.fillStyle = 'red';
 
-      predictions.forEach(pred => {
-        const [x, y, w, h] = pred.bbox;
+      predictions.forEach(p => {
+        const [x, y, w, h] = p.bbox;
         ctx.strokeRect(x, y, w, h);
-        ctx.fillText(`${pred.class} ${(pred.score*100).toFixed(1)}%`, x, y > 10 ? y-5 : 10);
+        ctx.fillText(`${p.class} ${p.score.toFixed(2)}`, x, y > 10 ? y - 5 : y + 15);
       });
     }
 
-    async function runDetection(video, model, canvas) {
+    async function runDetection() {
+      if (!model) return;
+
       const inputTensor = tf.browser.fromPixels(video)
         .resizeBilinear([640, 640])
         .div(255)
@@ -81,34 +77,21 @@
 
       try {
         const output = await model.executeAsync(inputTensor);
-
-        // YOLOv8 输出解析（根据 hyuto 模型）
-        // output[0] 是 boxes，output[1] 是 scores，output[2] 是 class
-        const boxes = output[0].arraySync();
-        const scores = output[1].arraySync();
-        const classes = output[2].arraySync();
-
-        // 打印输出，方便调试
-        console.log('预测输出:', boxes, scores, classes);
+        const data = output.arraySync()[0]; // shape: [N,6]
 
         const predictions = [];
-        for (let i = 0; i < boxes.length; i++) {
-          if (scores[i] > 0.3) { // 阈值
-            const [x1, y1, x2, y2] = boxes[i];
+        for (let i = 0; i < data.length; i++) {
+          const [x, y, w, h, score, classId] = data[i];
+          if (score > 0.3) {
             predictions.push({
-              bbox: [
-                x1 * video.videoWidth,
-                y1 * video.videoHeight,
-                (x2 - x1) * video.videoWidth,
-                (y2 - y1) * video.videoHeight
-              ],
-              score: scores[i],
-              class: classes[i].toString()
+              bbox: [x * video.videoWidth, y * video.videoHeight, w * video.videoWidth, h * video.videoHeight],
+              score: score,
+              class: classId.toString()
             });
           }
         }
 
-        drawPredictions(predictions, canvas, video);
+        drawPredictions(predictions);
       } catch (err) {
         console.error('模型预测失败:', err);
       } finally {
@@ -116,27 +99,17 @@
         if (Array.isArray(output)) output.forEach(t => t.dispose());
         else output.dispose();
       }
+
+      requestAnimationFrame(runDetection);
     }
 
-    async function runDemo() {
-      const video = await initCamera(currentFacingMode);
-      const canvas = document.getElementById('canvas');
-      const model = await loadModel();
-
-      async function detectLoop() {
-        await runDetection(video, model, canvas);
-        requestAnimationFrame(detectLoop);
-      }
-      detectLoop();
-
-      // 切换摄像头
-      document.getElementById('switchCam').onclick = async () => {
-        currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
-        await initCamera(currentFacingMode);
-      };
+    async function init() {
+      await startCamera();
+      await loadModel();
+      runDetection();
     }
 
-    window.onload = runDemo;
+    init();
   </script>
 </body>
 </html>
