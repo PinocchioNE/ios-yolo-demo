@@ -10,19 +10,32 @@
       height: 480px;
       border: 1px solid #333;
     }
+    #controls {
+      margin: 10px 0;
+    }
   </style>
 </head>
 <body>
   <h1>YOLOv8 Demo</h1>
+  <div id="controls">
+    <button id="switchCamera">切换摄像头</button>
+  </div>
   <video id="video" autoplay muted></video>
   <canvas id="canvas"></canvas>
 
   <script>
-    async function initCamera() {
+    let currentCamera = 'user'; // 默认前置摄像头
+    let videoStream = null;
+    let model = null;
+
+    async function initCamera(camera = 'user') {
       const video = document.getElementById('video');
+      if (videoStream) {
+        videoStream.getTracks().forEach(track => track.stop());
+      }
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        video.srcObject = stream;
+        videoStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: camera } });
+        video.srcObject = videoStream;
         return new Promise(resolve => {
           video.onloadedmetadata = () => {
             video.play();
@@ -36,13 +49,9 @@
 
     async function loadModel() {
       const modelUrl = 'https://hyuto.github.io/yolov8-tfjs/yolov8n_web_model/model.json';
-      try {
-        const model = await tf.loadGraphModel(modelUrl);
-        console.log('Model loaded:', model);
-        return model;
-      } catch (err) {
-        alert('模型加载失败，请检查模型 URL 或网络：' + err);
-      }
+      const loadedModel = await tf.loadGraphModel(modelUrl);
+      console.log('Model loaded:', loadedModel);
+      return loadedModel;
     }
 
     function drawPredictions(predictions, canvas, video) {
@@ -64,33 +73,22 @@
     }
 
     async function runDetection(video, model, canvas) {
-      tf.engine().startScope();
-
       const inputTensor = tf.browser.fromPixels(video)
         .resizeBilinear([640, 640])
         .div(255)
         .expandDims(0);
 
-      let output;
-      try {
-        output = await model.executeAsync(inputTensor);
-      } catch (err) {
-        console.error('推理失败:', err);
-        tf.engine().endScope();
-        return;
-      }
+      const output = await model.executeAsync(inputTensor);
 
-      let boxes = [], scores = [], classes = [];
-      if (Array.isArray(output)) {
-        boxes = output[0].arraySync();
-        scores = output[1].arraySync();
-        classes = output[2].arraySync();
-      } else {
-        console.warn('模型输出格式未知:', output);
-      }
+      // YOLOv8 TF.js 输出解析
+      // output 是字典: {boxes, scores, classes, valid_detections}
+      const boxes = output['boxes'].arraySync();        // [num_boxes,4]
+      const scores = output['scores'].arraySync();      // [num_boxes]
+      const classes = output['classes'].arraySync();    // [num_boxes]
+      const numDetections = output['num_detections'].dataSync()[0];
 
       const predictions = [];
-      for (let i = 0; i < boxes.length; i++) {
+      for (let i = 0; i < numDetections; i++) {
         if (scores[i] > 0.3) {
           const [x1, y1, x2, y2] = boxes[i];
           predictions.push({
@@ -107,17 +105,14 @@
       }
 
       drawPredictions(predictions, canvas, video);
-
-      tf.dispose(inputTensor);
-      if (Array.isArray(output)) output.forEach(t => t.dispose());
-      tf.engine().endScope();
+      inputTensor.dispose();
+      Object.values(output).forEach(t => t.dispose());
     }
 
     async function runDemo() {
-      const video = await initCamera();
+      const video = await initCamera(currentCamera);
       const canvas = document.getElementById('canvas');
-      const model = await loadModel();
-      if (!model) return;
+      model = await loadModel();
 
       async function detectLoop() {
         await runDetection(video, model, canvas);
@@ -125,6 +120,12 @@
       }
       detectLoop();
     }
+
+    // 切换摄像头按钮
+    document.getElementById('switchCamera').onclick = async () => {
+      currentCamera = currentCamera === 'user' ? 'environment' : 'user';
+      await initCamera(currentCamera);
+    };
 
     window.onload = runDemo;
   </script>
