@@ -1,105 +1,102 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>YOLOv8 TF.js Demo</title>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0/dist/tf.min.js"></script>
-<style>
-  video, canvas { border: 1px solid black; }
-  #container { display: flex; gap: 10px; }
-</style>
+  <meta charset="UTF-8">
+  <title>YOLOv8 TF.js Demo</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0/dist/tf.min.js"></script>
+  <style>
+    video, canvas {
+      width: 320px;
+      height: 240px;
+      border: 1px solid #333;
+      margin: 5px;
+    }
+  </style>
 </head>
 <body>
+  <h2>YOLOv8 TF.js Demo</h2>
+  <button id="switchBtn">切换前/后摄像头</button>
+  <div>
+    <video id="video" autoplay muted></video>
+    <canvas id="canvas"></canvas>
+  </div>
 
-<div>
-  <button id="switchBtn">切换摄像头</button>
-</div>
-<div id="container">
-  <video id="video" width="640" height="480" autoplay muted></video>
-  <canvas id="canvas2" width="640" height="480"></canvas>
-</div>
+  <script>
+    let video = document.getElementById('video');
+    let canvas = document.getElementById('canvas');
+    let ctx = canvas.getContext('2d');
+    let model;
+    let useFrontCamera = true;
+    let stream;
 
-<script>
-let model;
-let video = document.getElementById('video');
-let canvas2 = document.getElementById('canvas2');
-let ctx2 = canvas2.getContext('2d');
-let currentFacingMode = 'user'; // 前置摄像头
-
-async function loadModel() {
-  model = await tf.loadGraphModel('https://hyuto.github.io/yolov8-tfjs/yolov8n_web_model/model.json');
-  console.log('Model loaded:', model);
-}
-
-async function startVideo() {
-  if (video.srcObject) {
-    video.srcObject.getTracks().forEach(track => track.stop());
-  }
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: currentFacingMode }
-  });
-  video.srcObject = stream;
-}
-
-document.getElementById('switchBtn').addEventListener('click', async () => {
-  currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
-  await startVideo();
-});
-
-async function runDetection() {
-  if (!model || !video.srcObject || video.readyState < 2) {
-    requestAnimationFrame(runDetection);
-    return;
-  }
-
-  const input = tf.tidy(() => tf.browser.fromPixels(video)
-      .resizeBilinear([640, 640])
-      .expandDims(0)
-      .div(255));
-
-  const output = await model.executeAsync(input);
-
-  // 打印输出确认结构
-  console.log(output);
-
-  let boxes = [];
-  // 根据输出 tensor 名称调整
-  if (output.output0) {
-    const data = await output.output0.array();
-    boxes = data[0].map(d => ({
-      x1: d[0] * canvas2.width / 640,
-      y1: d[1] * canvas2.height / 640,
-      x2: d[2] * canvas2.width / 640,
-      y2: d[3] * canvas2.height / 640,
-      score: d[4],
-      class: d[5]
-    }));
-  }
-
-  ctx2.clearRect(0, 0, canvas2.width, canvas2.height);
-
-  boxes.forEach(b => {
-    if (b.score > 0.3) {
-      ctx2.strokeStyle = 'red';
-      ctx2.lineWidth = 2;
-      ctx2.strokeRect(b.x1, b.y1, b.x2 - b.x1, b.y2 - b.y1);
-      ctx2.fillStyle = 'red';
-      ctx2.font = '16px sans-serif';
-      ctx2.fillText(`${b.class} ${b.score.toFixed(2)}`, b.x1, b.y1 - 5);
+    async function loadModel() {
+      model = await tf.loadGraphModel('https://hyuto.github.io/yolov8-tfjs/yolov8n_web_model/model.json');
+      console.log('Model loaded:', model);
+      startCamera();
     }
-  });
 
-  tf.dispose(input);
-  requestAnimationFrame(runDetection);
-}
+    async function startCamera() {
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+      }
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: useFrontCamera ? 'user' : 'environment' }
+      });
+      video.srcObject = stream;
+      video.onloadedmetadata = () => {
+        video.play();
+        runDetection();
+      };
+    }
 
-async function init() {
-  await loadModel();
-  await startVideo();
-  runDetection();
-}
+    document.getElementById('switchBtn').addEventListener('click', () => {
+      useFrontCamera = !useFrontCamera;
+      startCamera();
+    });
 
-init();
-</script>
+    async function runDetection() {
+      if (!model) return;
+      tf.engine().startScope();
+
+      const videoTensor = tf.browser.fromPixels(video).expandDims(0).toFloat().div(255);
+      const predictions = await model.executeAsync(videoTensor);
+
+      // predictions 是对象或数组，根据模型输出调整
+      // 这里假设 predictions 是数组，取第一个 tensor
+      let boxes = [];
+      if (Array.isArray(predictions)) {
+        boxes = await predictions[0].array();
+      } else if (predictions instanceof tf.Tensor) {
+        boxes = await predictions.array();
+      } else if (typeof predictions === 'object') {
+        // TF.js graph model 输出对象时
+        const key = Object.keys(predictions)[0];
+        boxes = await predictions[key].array();
+      }
+
+      // 清空 canvas
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // 绘制预测框
+      boxes.forEach(box => {
+        // 假设 box = [x1, y1, x2, y2, score, class]
+        const [x1, y1, x2, y2, score, cls] = box;
+        if (score > 0.3) { // 阈值
+          ctx.strokeStyle = 'red';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x1 * canvas.width, y1 * canvas.height, (x2 - x1) * canvas.width, (y2 - y1) * canvas.height);
+          ctx.fillStyle = 'red';
+          ctx.fillText(`cls:${cls} ${score.toFixed(2)}`, x1 * canvas.width, y1 * canvas.height - 2);
+        }
+      });
+
+      console.log('Predictions:', boxes);
+      tf.engine().endScope();
+      requestAnimationFrame(runDetection);
+    }
+
+    loadModel();
+  </script>
 </body>
 </html>
