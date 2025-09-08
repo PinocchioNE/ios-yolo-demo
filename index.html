@@ -285,7 +285,7 @@
                 updateStatus('正在加载模型...', 'loading');
                 
                 // 加载YOLOv8模型
-                const modelUrl = 'https://github.com/PinocchioNE/ios-yolo-demo/tree/main/yolov8n_web_model/model.json';
+                const modelUrl = 'https://pinocchione.github.io/ios-yolo-demo/yolov8n_web_model/model.json';
                 model = await tf.loadGraphModel(modelUrl);
                 
                 updateStatus('模型加载成功', 'ready');
